@@ -70,26 +70,18 @@ IF(WITH_INNOBASE_STORAGE_ENGINE OR WITH_XTRADB_STORAGE_ENGINE)
     ${CMAKE_SOURCE_DIR}/storage/innobase/include
     ${CMAKE_SOURCE_DIR}/sql)
 
-  # We use the InnoDB code directly in case the code changes.
-  ADD_DEFINITIONS("-DUNIV_INNOCHECKSUM")
+  ADD_DEFINITIONS(-UMYSQL_SERVER)
 
-  SET(INNOBASE_SOURCES
-      ../storage/innobase/buf/buf0checksum.cc
-      ../storage/innobase/ut/ut0crc32.cc
-      ../storage/innobase/ut/ut0ut.cc
-      ../storage/innobase/page/page0zip.cc
-      )
+  MYSQL_ADD_EXECUTABLE(innochecksum
+    innochecksum.cc
+    ${PROJECT_SOURCE_DIR}/libmysql/libmysql.c
+    COMPONENT checksum)
 
-  IF(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
-      enable_language(ASM)
-      LIST(APPEND INNOBASE_SOURCES
-         ../storage/innobase/ut/crc32_power8/crc32.S
-         ../storage/innobase/ut/crc32_power8/crc32_wrapper.c
-         )
-  ENDIF()
+  # Export all symbols on Unix, for better crash callstacks
+  SET_TARGET_PROPERTIES(innochecksum PROPERTIES ENABLE_EXPORTS TRUE)
 
-  MYSQL_ADD_EXECUTABLE(innochecksum innochecksum.cc ${INNOBASE_SOURCES})
-  TARGET_LINK_LIBRARIES(innochecksum mysys mysys_ssl)
+  TARGET_LINK_LIBRARIES(innochecksum sql)
+
   ADD_DEPENDENCIES(innochecksum GenError)
 ENDIF()
 

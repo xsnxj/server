@@ -692,7 +692,7 @@ buf_page_is_corrupted(
 	ulint		checksum_field2;
 	ulint 		space_id = mach_read_from_4(
 		read_buf + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID);
-	ulint page_type = mach_read_from_4(
+	ulint page_type = mach_read_from_2(
 		read_buf + FIL_PAGE_TYPE);
 
 	/* We can trust page type if page compression is set on tablespace
