@@ -1485,7 +1485,7 @@ trx_undo_update_rec_get_update(
 
 	buf = static_cast<byte*>(mem_heap_alloc(heap, DATA_TRX_ID_LEN));
 
-	trx_write_trx_id(buf, trx_id);
+	mach_write_to_6(buf, trx_id);
 
 	upd_field_set_field_no(upd_field,
 			       dict_index_get_sys_col_pos(index, DATA_TRX_ID),

@@ -108,6 +108,10 @@ row_vers_impl_x_locked_low(
 		clust_rec, clust_index, NULL, ULINT_UNDEFINED, &heap);
 
 	trx_id = row_get_rec_trx_id(clust_rec, clust_index, clust_offsets);
+	if (trx_id == 0) {
+		/* The transaction history was already purged. */
+		DBUG_RETURN(0);
+	}
 	corrupt = FALSE;
 
 	trx_t*	trx = trx_rw_is_active(trx_id, &corrupt, true);
@@ -1265,6 +1269,10 @@ row_vers_build_for_semi_consistent_read(
 		version_trx_id = row_get_rec_trx_id(version, index, *offsets);
 		if (rec == version) {
 			rec_trx_id = version_trx_id;
+		}
+
+		if (!version_trx_id) {
+			goto committed_version_trx;
 		}
 
 		trx_sys_mutex_enter();
