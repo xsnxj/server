@@ -3055,7 +3055,10 @@ void mysqld_stmt_execute(THD *thd, char *packet_arg, uint packet_length)
   ulong stmt_id= uint4korr(packet);
   ulong flags= (ulong) packet[4];
 #ifndef EMBEDDED_LIBRARY
-  ulong iterations= uint4korr(packet + 5);
+  ulong iterations= ((thd->client_capabilities &
+                      MARIADB_CLIENT_STMT_BULK_OPERATIONS) ?
+                     uint4korr(packet + 5) :
+                     0);
 #else
   ulong iterations= 0; // no support
 #endif
@@ -3089,7 +3092,7 @@ void mysqld_stmt_execute(THD *thd, char *packet_arg, uint packet_length)
   open_cursor= MY_TEST(flags & (ulong) CURSOR_TYPE_READ_ONLY);
 
   thd->protocol= &thd->protocol_binary;
-  if (iterations <= 1)
+  if (iterations == 0)
     stmt->execute_loop(&expanded_query, open_cursor, packet, packet_end);
   else
     stmt->execute_bulk_loop(&expanded_query, open_cursor, packet, packet_end,
@@ -4152,7 +4155,13 @@ my_bool Prepared_statement::set_bulk_parameters(bool reset)
       reset_stmt_params(this);
       DBUG_RETURN(true);
     }
-    iterations--;
+    if (iterations == 0xFFFFFFFF)
+    {
+      if (packet == packet_end)
+        iterations= 0;
+    }
+    else
+      iterations--;
   }
   start_param= 0;
   DBUG_RETURN(false);
