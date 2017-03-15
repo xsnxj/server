@@ -890,10 +890,8 @@ row_purge_parse_undo_rec(
 {
 	dict_index_t*	clust_index;
 	byte*		ptr;
-	trx_t*		trx;
 	undo_no_t	undo_no;
 	table_id_t	table_id;
-	trx_id_t	trx_id;
 	roll_ptr_t	roll_ptr;
 	ulint		info_bits;
 	ulint		type;
@@ -907,15 +905,21 @@ row_purge_parse_undo_rec(
 
 	node->rec_type = type;
 
-	if (type == TRX_UNDO_UPD_DEL_REC && !*updated_extern) {
-
-		return(false);
+	switch (type) {
+	case TRX_UNDO_INSERT_REC:
+		break;
+	default:
+#ifdef UNIV_DEBUG
+		ut_ad(0);
+		return false;
+	case TRX_UNDO_UPD_DEL_REC:
+	case TRX_UNDO_UPD_EXIST_REC:
+	case TRX_UNDO_DEL_MARK_REC:
+#endif /* UNIV_DEBUG */
+		ptr = trx_undo_update_rec_get_sys_cols(ptr, &node->trx_id,
+						       &roll_ptr, &info_bits);
+		break;
 	}
-
-	ptr = trx_undo_update_rec_get_sys_cols(ptr, &trx_id, &roll_ptr,
-					       &info_bits);
-	node->table = NULL;
-	node->trx_id = trx_id;
 
 	/* Prevent DROP TABLE etc. from running when we are doing the purge
 	for this row */
@@ -932,7 +936,8 @@ try_again:
 	}
 	ut_ad(!dict_table_is_temporary(node->table));
 
-	if (node->table->n_v_cols && !node->table->vc_templ
+	if (type != TRX_UNDO_INSERT_REC
+	    && node->table->n_v_cols && !node->table->vc_templ
 	    && dict_table_has_indexed_v_cols(node->table)) {
 		/* Need server fully up for virtual column computation */
 		if (!mysqld_server_started) {
@@ -966,10 +971,14 @@ err_exit:
 	ptr = trx_undo_rec_get_row_ref(ptr, clust_index, &(node->ref),
 				       node->heap);
 
-	trx = thr_get_trx(thr);
+	if (type == TRX_UNDO_INSERT_REC) {
+		return(true);
+	}
 
-	ptr = trx_undo_update_rec_get_update(ptr, clust_index, type, trx_id,
-					     roll_ptr, info_bits, trx,
+	ptr = trx_undo_update_rec_get_update(ptr, clust_index, type,
+					     node->trx_id,
+					     roll_ptr, info_bits,
+					     thr_get_trx(thr),
 					     node->heap, &(node->update));
 
 	/* Read to the partial row the fields that occur in indexes */

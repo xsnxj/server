@@ -1422,10 +1422,8 @@ parse_log:
 		ptr = trx_undo_parse_discard_latest(ptr, end_ptr, page, mtr);
 		break;
 	case MLOG_UNDO_HDR_CREATE:
-	case MLOG_UNDO_HDR_REUSE:
 		ut_ad(!page || page_type == FIL_PAGE_UNDO_LOG);
-		ptr = trx_undo_parse_page_header(type, ptr, end_ptr,
-						 page, mtr);
+		ptr = trx_undo_parse_page_header(ptr, end_ptr, page, mtr);
 		break;
 	case MLOG_REC_MIN_MARK: case MLOG_COMP_REC_MIN_MARK:
 		ut_ad(!page || fil_page_type_is_index(page_type));
@@ -3581,9 +3579,6 @@ get_mlog_string(mlog_id_t type)
 
 	case MLOG_UNDO_HDR_DISCARD:
 		return("MLOG_UNDO_HDR_DISCARD");
-
-	case MLOG_UNDO_HDR_REUSE:
-		return("MLOG_UNDO_HDR_REUSE");
 
 	case MLOG_UNDO_HDR_CREATE:
 		return("MLOG_UNDO_HDR_CREATE");

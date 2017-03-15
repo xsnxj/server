@@ -142,9 +142,6 @@ struct innodb_page_type {
 	int n_undo_state_to_purge;
 	int n_undo_state_prepared;
 	int n_undo_state_other;
-	int n_undo_insert;
-	int n_undo_update;
-	int n_undo_other;
 	int n_fil_page_index;
 	int n_fil_page_undo_log;
 	int n_fil_page_inode;
@@ -1023,25 +1020,9 @@ parse_page(
 
 	case FIL_PAGE_UNDO_LOG:
 		page_type.n_fil_page_undo_log++;
-		undo_page_type = mach_read_from_2(page +
-				     TRX_UNDO_PAGE_HDR + TRX_UNDO_PAGE_TYPE);
 		if (page_type_dump) {
 			fprintf(file, "#::%8" PRIuMAX "\t\t|\t\tUndo log page\t\t\t|",
 				cur_page_num);
-		}
-		if (undo_page_type == TRX_UNDO_INSERT) {
-			page_type.n_undo_insert++;
-			if (page_type_dump) {
-				fprintf(file, "\t%s",
-					"Insert Undo log page");
-			}
-
-		} else if (undo_page_type == TRX_UNDO_UPDATE) {
-			page_type.n_undo_update++;
-			if (page_type_dump) {
-				fprintf(file, "\t%s",
-					"Update undo log page");
-			}
 		}
 
 		undo_page_type = mach_read_from_2(page + TRX_UNDO_SEG_HDR +
@@ -1060,14 +1041,6 @@ parse_page(
 				if (page_type_dump) {
 					fprintf(file, ", %s", "Page is "
 						"cached for quick reuse");
-				}
-				break;
-
-			case TRX_UNDO_TO_FREE:
-				page_type.n_undo_state_to_free++;
-				if (page_type_dump) {
-					fprintf(file, ", %s", "Insert undo "
-						"segment that can be freed");
 				}
 				break;
 
@@ -1293,10 +1266,8 @@ print_summary(
 
 	fprintf(fil_out, "\n===============================================\n");
 	fprintf(fil_out, "Additional information:\n");
-	fprintf(fil_out, "Undo page type: %d insert, %d update, %d other\n",
-		page_type.n_undo_insert,
-		page_type.n_undo_update,
-		page_type.n_undo_other);
+	fprintf(fil_out, "Undo page type: %d\n",
+		page_type.n_fil_page_undo_log);
 	fprintf(fil_out, "Undo page state: %d active, %d cached, %d to_free, %d"
 		" to_purge, %d prepared, %d other\n",
 		page_type.n_undo_state_active,

@@ -217,26 +217,17 @@ trx_rollback_low(
 
 	case TRX_STATE_PREPARED:
 		ut_ad(!trx_is_autocommit_non_locking(trx));
-		if (trx_is_redo_rseg_updated(trx)) {
+		if (trx_undo_t* undo = trx->rsegs.m_redo.undo) {
 			/* Change the undo log state back from
 			TRX_UNDO_PREPARED to TRX_UNDO_ACTIVE
 			so that if the system gets killed,
 			recovery will perform the rollback. */
-			trx_undo_ptr_t*	undo_ptr = &trx->rsegs.m_redo;
+			ut_ad(undo->rseg == trx->rsegs.m_redo.rseg);
 			mtr_t		mtr;
 			mtr.start();
-			mutex_enter(&trx->rsegs.m_redo.rseg->mutex);
-			if (undo_ptr->insert_undo != NULL) {
-				trx_undo_set_state_at_prepare(
-					trx, undo_ptr->insert_undo,
-					true, &mtr);
-			}
-			if (undo_ptr->update_undo != NULL) {
-				trx_undo_set_state_at_prepare(
-					trx, undo_ptr->update_undo,
-					true, &mtr);
-			}
-			mutex_exit(&trx->rsegs.m_redo.rseg->mutex);
+			mutex_enter(&undo->rseg->mutex);
+			trx_undo_set_state_at_prepare(trx, undo, true, &mtr);
+			mutex_exit(&undo->rseg->mutex);
 			/* Persist the XA ROLLBACK, so that crash
 			recovery will replay the rollback in case
 			the redo log gets applied past this point. */
@@ -901,20 +892,12 @@ trx_roll_try_truncate(trx_t* trx)
 	trx->pages_undone = 0;
 
 	undo_no_t	undo_no		= trx->undo_no;
-	trx_undo_t*	insert_undo	= trx->rsegs.m_redo.insert_undo;
-	trx_undo_t*	update_undo	= trx->rsegs.m_redo.update_undo;
 
-	if (insert_undo || update_undo) {
-		mutex_enter(&trx->rsegs.m_redo.rseg->mutex);
-		if (insert_undo) {
-			ut_ad(insert_undo->rseg == trx->rsegs.m_redo.rseg);
-			trx_undo_truncate_end(insert_undo, undo_no, false);
-		}
-		if (update_undo) {
-			ut_ad(update_undo->rseg == trx->rsegs.m_redo.rseg);
-			trx_undo_truncate_end(update_undo, undo_no, false);
-		}
-		mutex_exit(&trx->rsegs.m_redo.rseg->mutex);
+	if (trx_undo_t*	undo = trx->rsegs.m_redo.undo) {
+		ut_ad(undo->rseg == trx->rsegs.m_redo.rseg);
+		mutex_enter(&undo->rseg->mutex);
+		trx_undo_truncate_end(undo, undo_no, false);
+		mutex_exit(&undo->rseg->mutex);
 	}
 
 	if (trx_undo_t* undo = trx->rsegs.m_noredo.undo) {
@@ -988,28 +971,14 @@ trx_roll_pop_top_rec_of_trx(trx_t* trx, roll_ptr_t* roll_ptr, mem_heap_t* heap)
 		trx_roll_try_truncate(trx);
 	}
 
-	trx_undo_t*	undo;
-	trx_undo_t*	insert	= trx->rsegs.m_redo.insert_undo;
-	trx_undo_t*	update	= trx->rsegs.m_redo.update_undo;
+	trx_undo_t*	undo	= trx->rsegs.m_redo.undo;
 	trx_undo_t*	temp	= trx->rsegs.m_noredo.undo;
 	const undo_no_t	limit	= trx->roll_limit;
 
-	ut_ad(!insert || !update || !insert->top_undo_no
-	      || insert->top_undo_no != update->top_undo_no);
-	ut_ad(!insert || !temp || !insert->top_undo_no
-	      || insert->top_undo_no != temp->top_undo_no);
-	ut_ad(!update || !temp || !update->top_undo_no
-	      || update->top_undo_no != temp->top_undo_no);
+	ut_ad(!undo || !temp || !undo->top_undo_no
+	      || undo->top_undo_no != temp->top_undo_no);
 
-	if (insert && !insert->empty && limit <= insert->top_undo_no) {
-		if (update && !update->empty
-		    && update->top_undo_no > insert->top_undo_no) {
-			undo = update;
-		} else {
-			undo = insert;
-		}
-	} else if (update && !update->empty && limit <= update->top_undo_no) {
-		undo = update;
+	if (undo && !undo->empty && limit <= undo->top_undo_no) {
 	} else if (temp && !temp->empty && limit <= temp->top_undo_no) {
 		undo = temp;
 	} else {
@@ -1035,10 +1004,7 @@ trx_roll_pop_top_rec_of_trx(trx_t* trx, roll_ptr_t* roll_ptr, mem_heap_t* heap)
 	trx_undo_rec_t*	undo_rec = trx_roll_pop_top_rec(trx, undo, &mtr);
 	const undo_no_t	undo_no = trx_undo_rec_get_undo_no(undo_rec);
 	if (trx_undo_rec_get_type(undo_rec) == TRX_UNDO_INSERT_REC) {
-		ut_ad(undo == insert || undo == temp);
 		*roll_ptr |= 1ULL << ROLL_PTR_INSERT_FLAG_POS;
-	} else {
-		ut_ad(undo == update || undo == temp);
 	}
 
 	ut_ad(trx_roll_check_undo_rec_ordering(

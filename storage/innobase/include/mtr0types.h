@@ -112,9 +112,6 @@ enum mlog_id_t {
 	/** discard an update undo log header */
 	MLOG_UNDO_HDR_DISCARD = 23,
 
-	/** reuse an insert undo log header */
-	MLOG_UNDO_HDR_REUSE = 24,
-
 	/** create an undo log header */
 	MLOG_UNDO_HDR_CREATE = 25,
 

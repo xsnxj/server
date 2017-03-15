@@ -221,8 +221,7 @@ trx_is_redo_rseg_updated(
 /*=====================*/
 	const trx_t*	   trx) /*!< in: transaction */
 {
-	return(trx->rsegs.m_redo.insert_undo != 0
-	       || trx->rsegs.m_redo.update_undo != 0);
+	return(trx->rsegs.m_redo.undo != 0);
 }
 
 /********************************************************************//**
