@@ -950,36 +950,17 @@ try_again:
 		innobase_init_vc_templ(node->table);
 	}
 
-	if (node->table->ibd_file_missing) {
-		/* We skip purge of missing .ibd files */
-
-		dict_table_close(node->table, FALSE, FALSE);
-
-		node->table = NULL;
-
-		goto err_exit;
-	}
-
-	clust_index = dict_table_get_first_index(node->table);
-
-	if (clust_index == NULL
+	if (node->table->ibd_file_missing
+	    || !(clust_index = dict_table_get_first_index(node->table))
 	    || dict_index_is_corrupted(clust_index)) {
-		/* The table was corrupt in the data dictionary.
-		dict_set_corrupted() works on an index, and
-		we do not have an index to call it with. */
-close_exit:
+
+		/* Skip the purge, because the file is missing or the
+		table is corrupted. */
 		dict_table_close(node->table, FALSE, FALSE);
+		node->table = NULL;
 err_exit:
 		rw_lock_s_unlock(dict_operation_lock);
 		return(false);
-	}
-
-	if (type == TRX_UNDO_UPD_EXIST_REC
-	    && (node->cmpl_info & UPD_NODE_NO_ORD_CHANGE)
-	    && !*updated_extern) {
-
-		/* Purge requires no changes to indexes: we may return */
-		goto close_exit;
 	}
 
 	ptr = trx_undo_rec_get_row_ref(ptr, clust_index, &(node->ref),
