@@ -1,0 +1,119 @@
+#
+# MDEV-11939: innochecksum mistakes a file for an encrypted one
+#
+# Don't test under embedded
+-- source include/not_embedded.inc
+-- source include/have_innodb.inc
+-- source include/have_file_key_management_plugin.inc
+
+if (!$INNOCHECKSUM) {
+  --echo Need innochecksum binary
+  --die Need innochecksum binary
+}
+
+--disable_warnings
+SET GLOBAL innodb_file_format = `Barracuda`;
+SET GLOBAL innodb_file_per_table = ON;
+--enable_warnings
+
+CREATE TABLE t1 (a INT AUTO_INCREMENT PRIMARY KEY, b TEXT) ENGINE=InnoDB ROW_FORMAT=COMPRESSED ENCRYPTED=NO;
+CREATE TABLE t2 (a INT AUTO_INCREMENT PRIMARY KEY, b TEXT) ENGINE=InnoDB ENCRYPTED=NO;
+CREATE TABLE t3 (a INT AUTO_INCREMENT PRIMARY KEY, b TEXT) ENGINE=InnoDB;
+CREATE TABLE t4 (a INT AUTO_INCREMENT PRIMARY KEY, b TEXT) ENGINE=InnoDB ROW_FORMAT=COMPRESSED;
+
+--disable_query_log
+--let $i = 5000
+while ($i)
+{
+  INSERT INTO t1 (b) VALUES (REPEAT('abcdefghijklmnopqrstuvwxyz', 100));
+  dec $i;
+}
+--enable_query_log
+
+INSERT INTO t2 SELECT * from t1;
+INSERT INTO t3 SELECT * from t1;
+INSERT INTO t4 SELECT * from t1;
+
+let $MYSQLD_DATADIR=`select @@datadir`;
+let INNODB_PAGE_SIZE=`select @@innodb_page_size`;
+let MYSQLD_DATADIR=`select @@datadir`;
+let t1_IBD = $MYSQLD_DATADIR/test/t1.ibd;
+let t2_IBD = $MYSQLD_DATADIR/test/t2.ibd;
+let t3_IBD = $MYSQLD_DATADIR/test/t3.ibd;
+let t4_IBD = $MYSQLD_DATADIR/test/t4.ibd;
+
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--source include/shutdown_mysqld.inc
+--source include/wait_until_disconnected.inc
+
+--echo # Backup tables before corrupting
+--copy_file $MYSQLD_DATADIR/test/t1.ibd $MYSQLD_DATADIR/test/t1.ibd.backup
+--copy_file $MYSQLD_DATADIR/test/t2.ibd $MYSQLD_DATADIR/test/t2.ibd.backup
+--copy_file $MYSQLD_DATADIR/test/t3.ibd $MYSQLD_DATADIR/test/t3.ibd.backup
+--copy_file $MYSQLD_DATADIR/test/t4.ibd $MYSQLD_DATADIR/test/t4.ibd.backup
+
+#
+# Corrupt FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION field on 3 pages
+#
+
+perl;
+open(FILE, "+<", "$ENV{MYSQLD_DATADIR}/test/t1.ibd") or die "open";
+binmode FILE;
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 1 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 2 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 3 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+close FILE or die "close";
+open(FILE, "+<", "$ENV{MYSQLD_DATADIR}/test/t2.ibd") or die "open";
+binmode FILE;
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 1 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 2 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 3 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+close FILE or die "close";
+open(FILE, "+<", "$ENV{MYSQLD_DATADIR}/test/t3.ibd") or die "open";
+binmode FILE;
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 1 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 2 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 3 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+close FILE or die "close";
+open(FILE, "+<", "$ENV{MYSQLD_DATADIR}/test/t4.ibd") or die "open";
+binmode FILE;
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 1 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 2 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+seek(FILE, $ENV{'INNODB_PAGE_SIZE'} * 3 + 26, SEEK_SET) or die "seek";
+print FILE pack("H*", "c00lcafedeadb017");
+close FILE or die "close";
+EOF
+
+#
+# Actual output is not interesting, only that there is no failures
+#
+--disable_result_log
+
+--exec $INNOCHECKSUM $t1_IBD
+
+--exec $INNOCHECKSUM $t2_IBD
+
+--exec $INNOCHECKSUM $t3_IBD
+
+--exec $INNOCHECKSUM $t4_IBD
+
+--enable_result_log
+
+--echo # Write file to make mysql-test-run.pl start up the server again
+--exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+--echo # Cleanup
+DROP TABLE t1, t2, t3,t4;
