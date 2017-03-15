@@ -102,6 +102,14 @@ row_vers_impl_x_locked_low(
 
 	ut_ad(rec_offs_validate(rec, index, offsets));
 
+	if (ulint trx_id_offset = clust_index->trx_id_offset) {
+		trx_id = mach_read_from_6(clust_rec + trx_id_offset);
+		if (trx_id == 0) {
+			/* The transaction history was already purged. */
+			DBUG_RETURN(0);
+		}
+	}
+
 	heap = mem_heap_create(1024);
 
 	clust_offsets = rec_get_offsets(
@@ -110,6 +118,7 @@ row_vers_impl_x_locked_low(
 	trx_id = row_get_rec_trx_id(clust_rec, clust_index, clust_offsets);
 	if (trx_id == 0) {
 		/* The transaction history was already purged. */
+		mem_heap_free(heap);
 		DBUG_RETURN(0);
 	}
 	corrupt = FALSE;
