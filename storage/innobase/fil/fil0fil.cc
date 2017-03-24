@@ -1133,60 +1133,64 @@ fil_space_extend_must_retry(
 		} while (err == EINTR
 			 && srv_shutdown_state == SRV_SHUTDOWN_NONE);
 
-		*success = !err;
-		if (!*success) {
-			ib::error() << "extending file '" << node->name
-				<< "' from "
-				<< start_offset
-				<< " to " << len + start_offset
-				<< " bytes failed with: " << err;
-		}
-# else /* HAVE_POSIX_FALLOCATE */
-		/* Extend at most 1 megabyte pages at a time */
-		ulint	n_bytes = std::min(ulint(1) << 20, n_pages)
-			* page_size;
-		byte*	buf2 = static_cast<byte*>(
-			calloc(1, n_bytes + page_size));
-		*success = buf2 != NULL;
-		if (!buf2) {
-			ib::error() << "Cannot allocate "
-				<< n_bytes + page_size
-				<< " bytes to extend file";
-		}
-		byte* const	buf = static_cast<byte*>(
-			ut_align(buf2, page_size));
-		IORequest	request(IORequest::WRITE);
+		if (err != EINVAL) {
+
+			*success = !err;
+			if (!*success) {
+				ib::error() << "extending file '" << node->name
+					<< "' from "
+					<< start_offset
+					<< " to " << len + start_offset
+					<< " bytes failed with: " << err;
+			}
+		} else
+# endif /* HAVE_POSIX_FALLOCATE */
+		{
+			/* Extend at most 1 megabyte pages at a time */
+			ulint	n_bytes = std::min(ulint(1) << 20, n_pages)
+				* page_size;
+			byte*	buf2 = static_cast<byte*>(
+				calloc(1, n_bytes + page_size));
+			*success = buf2 != NULL;
+			if (!buf2) {
+				ib::error() << "Cannot allocate "
+					<< n_bytes + page_size
+					<< " bytes to extend file";
+			}
+			byte* const	buf = static_cast<byte*>(
+				ut_align(buf2, page_size));
+			IORequest	request(IORequest::WRITE);
 
 
-		os_offset_t		offset = start_offset;
-		const os_offset_t	end = start_offset + len;
-		const bool		read_only_mode = space->purpose
-			== FIL_TYPE_TEMPORARY && srv_read_only_mode;
+			os_offset_t		offset = start_offset;
+			const os_offset_t	end = start_offset + len;
+			const bool		read_only_mode = space->purpose
+				== FIL_TYPE_TEMPORARY && srv_read_only_mode;
 
-		while (*success && offset < end) {
-			dberr_t	err = os_aio(
-				request, OS_AIO_SYNC, node->name,
-				node->handle, buf, offset, n_bytes,
-				read_only_mode, NULL, NULL);
+			while (*success && offset < end) {
+				dberr_t	err = os_aio(
+					request, OS_AIO_SYNC, node->name,
+					node->handle, buf, offset, n_bytes,
+					read_only_mode, NULL, NULL);
 
-			if (err != DB_SUCCESS) {
-				*success = false;
-				ib::error() << "writing zeroes to file '"
-					<< node->name << "' from "
-					<< offset << " to " << offset + n_bytes
-					<< " bytes failed with: "
-					<< ut_strerr(err);
-				break;
+				if (err != DB_SUCCESS) {
+					*success = false;
+					ib::error() << "writing zeroes to file '"
+						<< node->name << "' from "
+						<< offset << " to " << offset + n_bytes
+						<< " bytes failed with: "
+						<< ut_strerr(err);
+					break;
+				}
+
+				offset += n_bytes;
+
+				n_bytes = std::min(n_bytes,
+						   static_cast<ulint>(end - offset));
 			}
 
-			offset += n_bytes;
-
-			n_bytes = std::min(n_bytes,
-					   static_cast<ulint>(end - offset));
+			free(buf2);
 		}
-
-		free(buf2);
-# endif /* HAVE_POSIX_FALLOCATE */
 
 		os_has_said_disk_full = *success;
 		if (*success) {

@@ -1025,7 +1025,7 @@ SELECT COUNT(*) FROM t1 WHERE d='1e1000';
 COUNT(*)
 0
 Warnings:
-Warning	1916	Got overflow when converting '' to DECIMAL. Value truncated.
+Warning	1916	Got overflow when converting '' to DECIMAL. Value truncated
 Warning	1292	Truncated incorrect DECIMAL value: '1e1000'
 ALTER TABLE t1
 ADD KEY f4(f4),

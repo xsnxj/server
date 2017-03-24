@@ -1725,6 +1725,7 @@ static void close_connections(void)
   Events::deinit();
   slave_prepare_for_shutdown();
   mysql_bin_log.stop_background_thread();
+  end_slave();
 
   /*
     Give threads time to die.
@@ -1802,7 +1803,7 @@ static void close_connections(void)
     DBUG_PRINT("quit",("Unlocking LOCK_thread_count"));
     mysql_mutex_unlock(&LOCK_thread_count);
   }
-  end_slave();
+  //end_slave();
   /* All threads has now been aborted */
   DBUG_PRINT("quit",("Waiting for threads to die (count=%u)",thread_count));
   mysql_mutex_lock(&LOCK_thread_count);

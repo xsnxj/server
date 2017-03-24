@@ -2275,6 +2275,9 @@ ha_myisam::check_if_supported_inplace_alter(TABLE *new_table,
 
   const uint op= alter_info->handler_flags;
 
+  if (alter_info->handler_flags & Alter_inplace_info::ALTER_COLUMN_VCOL)
+    DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
+
   /*
     ha_myisam::open() updates table->key_info->block_size to be the actual
     MYI index block size, overwriting user-specified value (if any).
