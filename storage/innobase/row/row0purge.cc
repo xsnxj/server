@@ -871,7 +871,7 @@ try_again:
 		innobase_init_vc_templ(node->table);
 	}
 
-	if (node->table->ibd_file_missing) {
+	if (node->table->file_unreadable) {
 		/* We skip purge of missing .ibd files */
 
 		dict_table_close(node->table, FALSE, FALSE);

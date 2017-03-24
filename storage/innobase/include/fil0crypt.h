@@ -293,14 +293,15 @@ Parse a MLOG_FILE_WRITE_CRYPT_DATA log entry
 @param[in]	ptr		Log entry start
 @param[in]	end_ptr		Log entry end
 @param[in]	block		buffer block
+@param[out]	err		DB_SUCCESS or DB_DECRYPTION_FAILED
 @return position on log buffer */
 UNIV_INTERN
 const byte*
 fil_parse_write_crypt_data(
 	const byte*		ptr,
 	const byte*		end_ptr,
-	const buf_block_t*	block)
-	MY_ATTRIBUTE((warn_unused_result));
+	const buf_block_t*	block,
+	dberr_t*		err);
 
 /** Encrypt a buffer.
 @param[in,out]		crypt_data	Crypt data

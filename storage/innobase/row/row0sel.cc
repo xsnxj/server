@@ -4191,13 +4191,14 @@ row_search_mvcc(
 
 		DBUG_RETURN(DB_TABLESPACE_DELETED);
 
-	} else if (prebuilt->table->ibd_file_missing) {
+	} else if (prebuilt->table->file_unreadable &&
+		   fil_space_get(prebuilt->table->space) == NULL) {
 
 		DBUG_RETURN(DB_TABLESPACE_NOT_FOUND);
 
-	} else if (prebuilt->table->is_encrypted) {
+	} else if (prebuilt->table->file_unreadable) {
 
-		return(DB_DECRYPTION_FAILED);
+		DBUG_RETURN(DB_DECRYPTION_FAILED);
 	} else if (!prebuilt->index_usable) {
 		DBUG_RETURN(DB_MISSING_HISTORY);
 
@@ -4673,7 +4674,7 @@ wait_table_again:
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					prebuilt->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 			rec = NULL;
 			goto lock_wait_or_error;
@@ -4695,7 +4696,7 @@ rec_loop:
 
 	rec = btr_pcur_get_rec(pcur);
 
-	if (!rec) {
+	if (!rec || index->table->file_unreadable) {
 		err = DB_DECRYPTION_FAILED;
 		goto lock_wait_or_error;
 	}

@@ -320,7 +320,7 @@ dict_stats_save_defrag_stats(
 {
 	dberr_t	ret;
 
-	if (index->table->ibd_file_missing) {
+	if (index->table->file_unreadable) {
 		ut_print_timestamp(stderr);
 		fprintf(stderr,
 			" InnoDB: Cannot save defragment stats because "

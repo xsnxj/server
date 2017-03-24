@@ -1,3 +1,4 @@
+call mtr.add_suppression("InnoDB: Unable to read tablespace .* page no .* into the buffer pool after .* attempts");
 CREATE TABLE t1 (a INT AUTO_INCREMENT PRIMARY KEY, b TEXT) ROW_FORMAT=COMPACT ENGINE=InnoDB;
 INSERT INTO t1 (b) VALUES ('corrupt me');
 INSERT INTO t1 (b) VALUES ('corrupt me');

@@ -62,6 +62,7 @@ Created 12/19/1997 Heikki Tuuri
 #include "srv0start.h"
 #include "m_string.h" /* for my_sys.h */
 #include "my_sys.h" /* DEBUG_SYNC_C */
+#include "fil0fil.h"
 
 #include "my_compare.h" /* enum icp_result */
 
@@ -3728,11 +3729,12 @@ row_search_for_mysql(
 
 		return(DB_TABLESPACE_DELETED);
 
-	} else if (prebuilt->table->ibd_file_missing) {
+	} else if (prebuilt->table->file_unreadable &&
+		fil_space_get(prebuilt->table->space) == NULL) {
 
 		return(DB_TABLESPACE_NOT_FOUND);
 
-	} else if (prebuilt->table->is_encrypted) {
+	} else if (prebuilt->table->file_unreadable) {
 
 		return(DB_DECRYPTION_FAILED);
 	} else if (!prebuilt->index_usable) {
@@ -4193,7 +4195,7 @@ wait_table_again:
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					prebuilt->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 			rec = NULL;
 			goto lock_wait_or_error;

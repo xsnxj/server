@@ -2207,7 +2207,7 @@ row_import_discard_changes(
 		index->space = FIL_NULL;
 	}
 
-	table->ibd_file_missing = TRUE;
+	table->file_unreadable = true;
 
 	fil_close_tablespace(trx, table->space);
 }
@@ -3453,7 +3453,7 @@ row_import_for_mysql(
 
 	ut_a(table->space);
 	ut_ad(prebuilt->trx);
-	ut_a(table->ibd_file_missing);
+	ut_a(table->file_unreadable);
 
 	trx_start_if_not_started(prebuilt->trx);
 
@@ -3758,7 +3758,7 @@ row_import_for_mysql(
 		return(row_import_error(prebuilt, trx, err));
 	}
 
-	table->ibd_file_missing = false;
+	table->file_unreadable = false;
 	table->flags2 &= ~DICT_TF2_DISCARDED;
 
 	if (autoinc != 0) {

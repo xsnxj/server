@@ -6467,7 +6467,7 @@ table_opened:
 	ib_table->thd = (void*)thd;
 
 	/* No point to init any statistics if tablespace is still encrypted. */
-	if (!ib_table->is_encrypted) {
+	if (!ib_table->file_unreadable) {
 		dict_stats_init(ib_table);
 	} else {
 		ib_table->stat_initialized = 1;
@@ -6475,7 +6475,8 @@ table_opened:
 
 	MONITOR_INC(MONITOR_TABLE_OPEN);
 
-	bool	no_tablespace;
+	bool	no_tablespace = false;
+	bool	ibd_missing = false;
 
 	if (dict_table_is_discarded(ib_table)) {
 
@@ -6490,7 +6491,7 @@ table_opened:
 
 		no_tablespace = false;
 
-	} else if (ib_table->ibd_file_missing) {
+	} else if (ib_table->file_unreadable && fil_space_get(ib_table->space) == NULL) {
 
 		ib_senderrf(
 			thd, IB_LOG_LEVEL_WARN,
@@ -6500,11 +6501,11 @@ table_opened:
 		file, best to play it safe. */
 
 		no_tablespace = true;
-	} else if (ib_table->is_encrypted) {
+		ibd_missing = true;
+	} else if (ib_table->file_unreadable) {
 		/* This means that tablespace was found but we could not
 		decrypt encrypted page. */
 		no_tablespace = true;
-		ib_table->ibd_file_missing = true;
 	} else {
 		no_tablespace = false;
 	}
@@ -6517,7 +6518,7 @@ table_opened:
 		/* If table has no talespace but it has crypt data, check
 		is tablespace made unaccessible because encryption service
 		or used key_id is not available. */
-		if (ib_table) {
+		if (ib_table && !ibd_missing) {
 			fil_space_crypt_t* crypt_data = ib_table->crypt_data;
 
 			if (crypt_data && crypt_data->should_encrypt()) {
@@ -6531,7 +6532,7 @@ table_opened:
 						ib_table->name, crypt_data->key_id);
 					ret_err = HA_ERR_DECRYPTION_FAILED;
 				}
-			} else if (ib_table->is_encrypted) {
+			} else if (ib_table->file_unreadable) {
 				push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
 					HA_ERR_DECRYPTION_FAILED,
 					"Table %s is encrypted but encryption service or"
@@ -6673,7 +6674,7 @@ table_opened:
 
 	/* Only if the table has an AUTOINC column. */
 	if (prebuilt->table != NULL
-	    && !prebuilt->table->ibd_file_missing
+	    && !prebuilt->table->file_unreadable
 	    && table->found_next_number_field != NULL) {
 		dict_table_autoinc_lock(prebuilt->table);
 
@@ -8660,7 +8661,7 @@ ha_innobase::write_row(
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -9007,7 +9008,7 @@ func_exit:
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -9427,7 +9428,7 @@ ha_innobase::update_row(
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -9542,7 +9543,7 @@ wsrep_error:
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -10245,6 +10246,15 @@ ha_innobase::general_fetch(
 	ut_a(prebuilt->trx == thd_to_trx(user_thd));
 
 	innobase_srv_conc_enter_innodb(prebuilt->trx);
+
+	if (prebuilt->table->corrupted) {
+		DBUG_RETURN(HA_ERR_CRASHED);
+	}
+
+	if (prebuilt->table->file_unreadable &&
+		fil_space_get(prebuilt->table->space) != NULL) {
+		DBUG_RETURN(HA_ERR_DECRYPTION_FAILED);
+	}
 
 	ret = row_search_for_mysql(
 		(byte*) buf, 0, prebuilt, match_mode, direction);
@@ -12984,7 +12994,7 @@ ha_innobase::discard_or_import_tablespace(
 		user may want to set the DISCARD flag in order to IMPORT
 		a new tablespace. */
 
-		if (dict_table->ibd_file_missing) {
+		if (dict_table->file_unreadable) {
 			ib_senderrf(
 				prebuilt->trx->mysql_thd,
 				IB_LOG_LEVEL_WARN, ER_TABLESPACE_MISSING,
@@ -12994,7 +13004,7 @@ ha_innobase::discard_or_import_tablespace(
 		err = row_discard_tablespace_for_mysql(
 			dict_table->name, prebuilt->trx);
 
-	} else if (!dict_table->ibd_file_missing) {
+	} else if (!dict_table->file_unreadable) {
 		/* Commit the transaction in order to
 		release the table lock. */
 		trx_commit_for_mysql(prebuilt->trx);
@@ -13073,7 +13083,7 @@ ha_innobase::truncate()
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -13094,7 +13104,7 @@ ha_innobase::truncate()
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -14493,7 +14503,7 @@ ha_innobase::analyze(
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -14509,7 +14519,7 @@ ha_innobase::analyze(
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -14619,7 +14629,7 @@ ha_innobase::check(
 
 		DBUG_RETURN(HA_ADMIN_CORRUPT);
 
-	} else if (prebuilt->table->ibd_file_missing) {
+	} else if (prebuilt->table->file_unreadable) {
 
 		ib_senderrf(
 			thd, IB_LOG_LEVEL_ERROR,
@@ -15822,7 +15832,7 @@ ha_innobase::transactional_table_lock(
 
 	if (share->ib_table != prebuilt->table) {
 		fprintf(stderr,
-			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %lu.",
+			"InnoDB: Warning: share->ib_table %p prebuilt->table %p table %s is_corrupt %d.",
 			share->ib_table, prebuilt->table, prebuilt->table->name, prebuilt->table->is_corrupt);
 	}
 
@@ -15839,7 +15849,7 @@ ha_innobase::transactional_table_lock(
 				ER_TABLESPACE_DISCARDED,
 				table->s->table_name.str);
 
-		} else if (prebuilt->table->ibd_file_missing) {
+		} else if (prebuilt->table->file_unreadable) {
 
 			ib_senderrf(
 				thd, IB_LOG_LEVEL_ERROR,

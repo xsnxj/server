@@ -541,6 +541,11 @@ fil_parse_write_crypt_data(
 		fil_space_release(space);
 	}
 
+	/* Check is used key found from encryption plugin */
+	if (crypt_data->should_encrypt() && !crypt_data->is_key_found()) {
+		return NULL;
+	}
+
 	return ptr;
 }
 
@@ -1967,11 +1972,11 @@ fil_crypt_rotate_page(
 		bool modified = false;
 		int needs_scrubbing = BTR_SCRUB_SKIP_PAGE;
 		lsn_t block_lsn = block->page.newest_modification;
-		uint kv =  block->page.key_version;
+		byte* frame = buf_block_get_frame(block);
+		uint kv =  mach_read_from_4(frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION);
 
 		/* check if tablespace is closing after reading page */
 		if (space->is_stopping()) {
-			byte* frame = buf_block_get_frame(block);
 
 			if (kv == 0 &&
 				fil_crypt_is_page_uninitialized(frame, zip_size)) {
@@ -1992,9 +1997,6 @@ fil_crypt_rotate_page(
 				mlog_write_ulint(frame +
 					FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID,
 					space_id, MLOG_4BYTES, &mtr);
-
-				/* update block */
-				block->page.key_version = key_state->key_version;
 
 				/* statistics */
 				state->crypt_stat.pages_modified++;

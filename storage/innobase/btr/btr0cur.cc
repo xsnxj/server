@@ -1117,7 +1117,7 @@ retry_page_get:
 				" used key_id is not available. "
 				" Can't continue reading table.",
 				index->table->name);
-			index->table->is_encrypted = true;
+			index->table->file_unreadable = true;
 		}
 
 		goto func_exit;
@@ -1230,7 +1230,7 @@ retry_page_get:
 						" used key_id is not available. "
 						" Can't continue reading table.",
 						index->table->name);
-					index->table->is_encrypted = true;
+					index->table->file_unreadable = true;
 				}
 
 				goto func_exit;
@@ -1259,7 +1259,7 @@ retry_page_get:
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 
 			goto func_exit;
@@ -2057,7 +2057,7 @@ btr_cur_open_at_index_side_func(
 	ulint		offsets_[REC_OFFS_NORMAL_SIZE];
 	ulint*		offsets		= offsets_;
 	dberr_t		err = DB_SUCCESS;
-	
+
 	rec_offs_init(offsets_);
 
 	estimate = latch_mode & BTR_ESTIMATE;
@@ -2166,7 +2166,7 @@ btr_cur_open_at_index_side_func(
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 
 			goto exit_loop;
@@ -2524,7 +2524,7 @@ btr_cur_open_at_rnd_pos_func(
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 			goto exit_loop;
 		}
@@ -5329,7 +5329,7 @@ btr_estimate_n_rows_in_range_on_level(
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 
 			mtr_commit(&mtr);
@@ -5479,6 +5479,11 @@ btr_estimate_n_rows_in_range_low(
 					    &cursor, 0,
 					    __FILE__, __LINE__, &mtr);
 
+		if (index->table->file_unreadable) {
+			mtr_commit(&mtr);
+			return (0);
+		}
+
 		ut_ad(!page_rec_is_infimum(btr_cur_get_rec(&cursor)));
 
 		/* We should count the border if there are any records to
@@ -5503,6 +5508,11 @@ btr_estimate_n_rows_in_range_low(
 				   << __FILE__ << " line: " << __LINE__
 				   << " table: " << index->table->name
 				   << " index: " << index->name;
+		}
+
+		if (index->table->file_unreadable) {
+			mtr_commit(&mtr);
+			return (0);
 		}
 
 		ut_ad(page_rec_is_infimum(btr_cur_get_rec(&cursor)));
@@ -5995,6 +6005,12 @@ btr_estimate_number_of_different_key_vals(
 		because otherwise our algorithm would give a wrong estimate
 		for an index where there is just one key value. */
 
+		if (index->table->file_unreadable) {
+			mtr_commit(&mtr);
+			goto exit_loop;
+		}
+
+
 		page = btr_cur_get_page(&cursor);
 
 		rec = page_rec_get_next(page_get_infimum_rec(page));
@@ -6078,6 +6094,7 @@ btr_estimate_number_of_different_key_vals(
 		mtr_commit(&mtr);
 	}
 
+exit_loop:
 	/* If we saw k borders between different key values on
 	n_sample_pages leaf pages, we can estimate how many
 	there will be in index->stat_n_leaf_pages */

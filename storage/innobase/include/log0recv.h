@@ -108,8 +108,9 @@ recv_sys_var_init(void);
 
 /** Apply the hash table of stored log records to persistent data pages.
 @param[in]	last_batch	whether the change buffer merge will be
-				performed as part of the operation */
-void
+				performed as part of the operation
+@return DB_SUCCESS or DB_DECRYPTION_FAILED */
+dberr_t
 recv_apply_hashed_log_recs(bool last_batch);
 
 /** Block of log record data */

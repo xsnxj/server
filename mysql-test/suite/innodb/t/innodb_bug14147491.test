@@ -2,6 +2,7 @@
 # Test opening a corrupted table.
 #
 # Valgrind can hang or return spurious messages on DBUG_SUICIDE
+call mtr.add_suppression("InnoDB: Unable to read tablespace .* page no .* into the buffer pool after .* attempts");
 source include/not_valgrind.inc;
 # Avoid CrashReporter popup on Mac
 source include/not_crashrep.inc;
@@ -19,7 +20,7 @@ source include/not_windows.inc;
 
 --disable_query_log
 CALL mtr.add_suppression("\\[ERROR\\] \\[FATAL\\] InnoDB: Unable to read page \\[page id: space=.*, page number=.*\\] into the buffer pool after 100 attempts");
-CALL mtr.add_suppression("\\[ERROR\\] InnoDB: Database page corruption on disk or a failed");
+CALL mtr.add_suppression("\\[ERROR\\] InnoDB: Database page corruption on disk or a failed .*");
 --enable_query_log
 
 CREATE TABLE t1 (a INT AUTO_INCREMENT PRIMARY KEY, b TEXT) ROW_FORMAT=COMPACT ENGINE=InnoDB;

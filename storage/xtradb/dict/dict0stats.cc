@@ -920,7 +920,11 @@ dict_stats_update_transient_for_index(
 
 		index->stat_n_leaf_pages = size;
 
-		btr_estimate_number_of_different_key_vals(index);
+		/* Do not continue if table decryption has failed or
+		table is already marked as corrupted. */
+		if (!index->table->file_unreadable && !index->table->corrupted) {
+			btr_estimate_number_of_different_key_vals(index);
+		}
 	}
 }
 
@@ -974,8 +978,9 @@ dict_stats_update_transient(
 			continue;
 		}
 
-		/* Do not continue if table decryption has failed. */
-		if (index->table->is_encrypted) {
+		/* Do not continue if table decryption has failed or
+		table is already marked as corrupted. */
+		if (index->table->file_unreadable || index->table->corrupted) {
 			break;
 		}
 
@@ -3192,7 +3197,7 @@ dict_stats_update(
 
 	ut_ad(!mutex_own(&dict_sys->mutex));
 
-	if (table->ibd_file_missing) {
+	if (table->file_unreadable) {
 		ut_print_timestamp(stderr);
 		fprintf(stderr,
 			" InnoDB: cannot calculate statistics for table %s "
@@ -3946,7 +3951,7 @@ dict_stats_save_defrag_stats(
 {
 	dberr_t	ret;
 
-	if (index->table->ibd_file_missing) {
+	if (index->table->file_unreadable) {
 		ut_print_timestamp(stderr);
 		fprintf(stderr,
 			" InnoDB: Cannot save defragment stats because "

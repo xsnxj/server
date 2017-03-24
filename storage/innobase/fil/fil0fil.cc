@@ -5454,7 +5454,25 @@ fil_aio_wait(
 		/* async single page writes from the dblwr buffer don't have
 		access to the page */
 		if (message != NULL) {
-			buf_page_io_complete(static_cast<buf_page_t*>(message));
+			buf_page_t *bpage = static_cast<buf_page_t*>(message);
+			const page_id_t page_id = bpage->id;
+			dberr_t err = buf_page_io_complete(bpage);
+
+			if (err != DB_SUCCESS) {
+
+				/* In crash recovery set log corruption on
+				and produce only an error to fail InnoDB startup. */
+				if (recv_recovery_is_on()) {
+					recv_sys->found_corrupt_log = true;
+				}
+
+				ib::error()
+					<< (type == IORequestRead ? "Read" : "Write")
+					<< "operation failed for " << node->name
+					<< " page " << page_id
+					<< " error= " << ut_strerr(err);
+			}
+
 		}
 		return;
 	case FIL_TYPE_LOG:

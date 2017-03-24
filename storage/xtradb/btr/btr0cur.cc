@@ -3,7 +3,7 @@
 Copyright (c) 1994, 2016, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2008, Google Inc.
 Copyright (c) 2012, Facebook Inc.
-Copyright (c) 2015, MariaDB Corporation.
+Copyright (c) 2015, 2017, MariaDB Corporation.
 
 Portions of this file contain modifications contributed and copyrighted by
 Google, Inc. Those modifications are gratefully acknowledged and are described
@@ -666,7 +666,7 @@ retry_page_get:
 				" used key_id is not available. "
 				" Can't continue reading table.",
 				index->table->name);
-			index->table->is_encrypted = true;
+			index->table->file_unreadable = true;
 		}
 
 		goto func_exit;
@@ -996,7 +996,7 @@ btr_cur_open_at_index_side_func(
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 
 			goto exit_loop;
@@ -1169,7 +1169,7 @@ btr_cur_open_at_rnd_pos_func(
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 			goto exit_loop;
 		}
@@ -3861,7 +3861,7 @@ btr_estimate_n_rows_in_range_on_level(
 					" used key_id is not available. "
 					" Can't continue reading table.",
 					index->table->name);
-				index->table->is_encrypted = true;
+				index->table->file_unreadable = true;
 			}
 
 			mtr_commit(&mtr);
@@ -4361,6 +4361,11 @@ btr_estimate_number_of_different_key_vals(
 		for an index where there is just one key value. */
 
 		page = btr_cur_get_page(&cursor);
+
+		if (index->table->file_unreadable || index->table->corrupted) {
+			mtr_commit(&mtr);
+			goto exit_loop;
+		}
 
 		SRV_CORRUPT_TABLE_CHECK(page, goto exit_loop;);
 		DBUG_EXECUTE_IF("ib_corrupt_page_while_stats_calc",

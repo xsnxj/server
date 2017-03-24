@@ -744,8 +744,8 @@ btr_root_block_get(
 
 	if (!block) {
 		if (index && index->table) {
-			index->table->is_encrypted = TRUE;
-			index->table->corrupted = FALSE;
+			index->table->file_unreadable = true;
+			index->table->corrupted = false;
 
 			ib_push_warning(index->table->thd, DB_DECRYPTION_FAILED,
 				"Table %s in tablespace %lu is encrypted but encryption service or"
@@ -5211,7 +5211,7 @@ btr_validate_index(
 
 	page_t*	root = btr_root_get(index, &mtr);
 
-	if (root == NULL && index->table->is_encrypted) {
+	if (root == NULL && index->table->file_unreadable) {
 		err = DB_DECRYPTION_FAILED;
 		mtr_commit(&mtr);
 		return err;

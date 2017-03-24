@@ -1404,9 +1404,9 @@ struct dict_table_t {
 	unsigned				flags2:DICT_TF2_BITS;
 
 	/** TRUE if this is in a single-table tablespace and the .ibd file is
-	missing. Then we must return in ha_innodb.cc an error if the user
-	tries to query such an orphaned table. */
-	unsigned				ibd_file_missing:1;
+	missing or page in file is encrypted. Then we must return in
+	ha_innodb.cc an error if the usertries to query such an table. */
+	unsigned				file_unreadable:1;
 
 	/** TRUE if the table object has been added to the dictionary cache. */
 	unsigned				cached:1;
@@ -1727,7 +1727,9 @@ public:
 	/** Timestamp of the last modification of this table. */
 	time_t					update_time;
 
-	bool					is_encrypted;
+	/** mysql_row_templ_t for base columns used for compute the virtual
+	columns */
+	dict_vcol_templ_t*			vc_templ;
 
 #ifdef UNIV_DEBUG
 	/** Value of 'magic_n'. */
@@ -1736,9 +1738,6 @@ public:
 	/** Magic number. */
 	ulint					magic_n;
 #endif /* UNIV_DEBUG */
-	/** mysql_row_templ_t for base columns used for compute the virtual
-	columns */
-	dict_vcol_templ_t*			vc_templ;
 };
 
 /*******************************************************************//**

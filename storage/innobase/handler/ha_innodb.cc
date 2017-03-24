@@ -6635,7 +6635,7 @@ ha_innobase::open(
 	ib_table->thd = (void*)thd;
 
 	/* No point to init any statistics if tablespace is still encrypted. */
-	if (!ib_table->is_encrypted) {
+	if (!ib_table->file_unreadable) {
 		dict_stats_init(ib_table);
 	} else {
 		ib_table->stat_initialized = 1;
@@ -6643,7 +6643,8 @@ ha_innobase::open(
 
 	MONITOR_INC(MONITOR_TABLE_OPEN);
 
-	bool	no_tablespace;
+	bool	no_tablespace = false;
+	bool	ibd_missing = false;
 
 	if (dict_table_is_discarded(ib_table)) {
 
@@ -6658,7 +6659,7 @@ ha_innobase::open(
 
 		no_tablespace = false;
 
-	} else if (ib_table->ibd_file_missing) {
+	} else if (ib_table->file_unreadable && fil_space_get(ib_table->space) == NULL) {
 
 		ib_senderrf(
 			thd, IB_LOG_LEVEL_WARN,
@@ -6668,11 +6669,11 @@ ha_innobase::open(
 		file, best to play it safe. */
 
 		no_tablespace = true;
-	} else if (ib_table->is_encrypted) {
+		ibd_missing = true;
+	} else if (ib_table->file_unreadable) {
 		/* This means that tablespace was found but we could not
 		decrypt encrypted page. */
 		no_tablespace = true;
-		ib_table->ibd_file_missing = true;
 	} else {
 		no_tablespace = false;
 	}
@@ -6685,7 +6686,7 @@ ha_innobase::open(
 		/* If table has no talespace but it has crypt data, check
 		is tablespace made unaccessible because encryption service
 		or used key_id is not available. */
-		if (ib_table) {
+		if (ib_table && !ibd_missing) {
 			bool warning_pushed = false;
 			fil_space_crypt_t* crypt_data = ib_table->crypt_data;
 
@@ -6706,7 +6707,7 @@ ha_innobase::open(
 			/* If table is marked as encrypted then we push
 			warning if it has not been already done as used
 			key_id might be found but it is incorrect. */
-			if (ib_table->is_encrypted && !warning_pushed) {
+			if (ib_table->file_unreadable && !warning_pushed) {
 				push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
 					HA_ERR_DECRYPTION_FAILED,
 					"Table %s is encrypted but encryption service or"
@@ -6871,7 +6872,7 @@ ha_innobase::open(
 	if (m_prebuilt->table == NULL
 	    || dict_table_is_temporary(m_prebuilt->table)
 	    || m_prebuilt->table->persistent_autoinc
-	    || m_prebuilt->table->ibd_file_missing) {
+	    || m_prebuilt->table->file_unreadable) {
 	} else if (const Field* ai = table->found_next_number_field) {
 		initialize_auto_increment(m_prebuilt->table, ai);
 	}
@@ -10321,6 +10322,14 @@ ha_innobase::general_fetch(
 			DB_FORCED_ABORT, 0,  m_user_thd));
 	}
 
+	if (m_prebuilt->table->corrupted) {
+		DBUG_RETURN(HA_ERR_CRASHED);
+	}
+
+	if (m_prebuilt->table->file_unreadable) {
+		DBUG_RETURN(HA_ERR_DECRYPTION_FAILED);
+	}
+
 	innobase_srv_conc_enter_innodb(m_prebuilt);
 
 	ret = row_search_mvcc(
@@ -13662,7 +13671,7 @@ ha_innobase::discard_or_import_tablespace(
 		user may want to set the DISCARD flag in order to IMPORT
 		a new tablespace. */
 
-		if (dict_table->ibd_file_missing) {
+		if (dict_table->file_unreadable) {
 			ib_senderrf(
 				m_prebuilt->trx->mysql_thd,
 				IB_LOG_LEVEL_WARN, ER_TABLESPACE_MISSING,
@@ -13672,7 +13681,7 @@ ha_innobase::discard_or_import_tablespace(
 		err = row_discard_tablespace_for_mysql(
 			dict_table->name.m_name, m_prebuilt->trx);
 
-	} else if (!dict_table->ibd_file_missing) {
+	} else if (!dict_table->file_unreadable) {
 		/* Commit the transaction in order to
 		release the table lock. */
 		trx_commit_for_mysql(m_prebuilt->trx);
@@ -14279,7 +14288,8 @@ ha_innobase::records(
 		*num_rows = HA_POS_ERROR;
 		DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
 
-	} else if (m_prebuilt->table->ibd_file_missing) {
+	} else if (m_prebuilt->table->file_unreadable &&
+		   fil_space_get(m_prebuilt->table->space) == NULL) {
 		ib_senderrf(
 			m_user_thd, IB_LOG_LEVEL_ERROR,
 			ER_TABLESPACE_MISSING,
@@ -15432,7 +15442,8 @@ ha_innobase::check(
 
 		DBUG_RETURN(HA_ADMIN_CORRUPT);
 
-	} else if (m_prebuilt->table->ibd_file_missing) {
+	} else if (m_prebuilt->table->file_unreadable &&
+		   fil_space_get(m_prebuilt->table->space) == NULL) {
 
 		ib_senderrf(
 			thd, IB_LOG_LEVEL_ERROR,

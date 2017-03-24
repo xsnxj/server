@@ -2530,7 +2530,12 @@ files_checked:
 			respective file pages, for the last batch of
 			recv_group_scan_log_recs(). */
 
-			recv_apply_hashed_log_recs(true);
+			err = recv_apply_hashed_log_recs(true);
+
+			if (err != DB_SUCCESS) {
+				return (err);
+			}
+
 			DBUG_PRINT("ib_log", ("apply completed"));
 		}
 

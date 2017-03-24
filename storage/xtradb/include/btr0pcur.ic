@@ -357,6 +357,11 @@ btr_pcur_move_to_next(
 			return(FALSE);
 		}
 
+		if (cursor->btr_cur.index->table->corrupted ||
+		    cursor->btr_cur.index->table->file_unreadable) {
+			return(FALSE);
+		}
+
 		btr_pcur_move_to_next_page(cursor, mtr);
 
 		return(TRUE);

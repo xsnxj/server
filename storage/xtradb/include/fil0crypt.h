@@ -117,10 +117,8 @@ struct fil_space_crypt_t : st_encryption_scheme
 		min_key_version(new_min_key_version),
 		page0_offset(0),
 		encryption(new_encryption),
-		key_found(),
 		rotate_state()
 	{
-		key_found = new_min_key_version;
 		key_id = new_key_id;
 		my_random_bytes(iv, sizeof(iv));
 		mutex_create(fil_crypt_data_mutex_key,
@@ -136,6 +134,8 @@ struct fil_space_crypt_t : st_encryption_scheme
 			type = CRYPT_SCHEME_1;
 			min_key_version = key_get_latest_version();
 		}
+
+		key_found = min_key_version;
 	}
 
 	/** Destructor */

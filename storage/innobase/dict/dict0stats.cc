@@ -912,10 +912,12 @@ dict_stats_update_transient_for_index(
 
 		index->stat_n_leaf_pages = size;
 
-		/* We don't handle the return value since it will be false
-		only when some thread is dropping the table and we don't
-		have to empty the statistics of the to be dropped index */
-		btr_estimate_number_of_different_key_vals(index);
+		/* Do not continue if table decryption has failed or
+		table is already marked corrupted. */
+		if (!index->table->file_unreadable &&
+		    !index->table->corrupted) {
+			btr_estimate_number_of_different_key_vals(index);
+		}
 	}
 }
 
@@ -966,8 +968,10 @@ dict_stats_update_transient(
 			continue;
 		}
 
-		/* Do not continue if table decryption has failed. */
-		if (index->table->is_encrypted) {
+		/* Do not continue if table decryption has failed or
+		table is already marked corrupted. */
+		if (index->table->file_unreadable ||
+		    index->table->corrupted) {
 			break;
 		}
 
@@ -3152,7 +3156,7 @@ dict_stats_update(
 {
 	ut_ad(!mutex_own(&dict_sys->mutex));
 
-	if (table->ibd_file_missing) {
+	if (table->file_unreadable) {
 
 		ib::warn() << "Cannot calculate statistics for table "
 			<< table->name

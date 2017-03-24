@@ -2,7 +2,7 @@
 
 Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
-Copyright (c) 2013, 2016, MariaDB Corporation.
+Copyright (c) 2013, 2017, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -1062,11 +1062,13 @@ struct dict_table_t{
 				table is placed */
 	unsigned	flags:DICT_TF_BITS;	/*!< DICT_TF_... */
 	unsigned	flags2:DICT_TF2_BITS;	/*!< DICT_TF2_... */
-	unsigned	ibd_file_missing:1;
-				/*!< TRUE if this is in a single-table
-				tablespace and the .ibd file is missing; then
-				we must return in ha_innodb.cc an error if the
-				user tries to query such an orphaned table */
+	unsigned	file_unreadable:1;
+				/*!< true if this is in a single-table
+				tablespace and the .ibd file is missing
+				or page decryption failed and page is
+				corrupted; then we must return in
+				ha_innodb.cc an error if the
+				user tries to query such table */
 	unsigned	cached:1;/*!< TRUE if the table object has been added
 				to the dictionary cache */
 	unsigned	to_be_dropped:1;
@@ -1364,8 +1366,8 @@ struct dict_table_t{
 	UT_LIST_BASE_NODE_T(lock_t)
 			locks;	/*!< list of locks on the table; protected
 				by lock_sys->mutex */
-	ibool		is_corrupt;
-	ibool		is_encrypted;
+	bool		is_corrupt;
+
 #endif /* !UNIV_HOTBACKUP */
 
 #ifdef UNIV_DEBUG
