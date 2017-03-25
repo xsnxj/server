@@ -1986,6 +1986,15 @@ thd_has_edited_nontrans_tables(
 	return((ibool) thd_non_transactional_update(thd));
 }
 
+/* Return high resolution timestamp for the start of the current query */
+UNIV_INTERN
+unsigned long long
+thd_query_start_micro(
+	const THD*	thd)	/*!< in: thread handle */
+{
+	return thd_start_utime(thd);
+}
+
 /******************************************************************//**
 Returns true if the thread is executing a SELECT statement.
 @return	true if thd is executing SELECT */
