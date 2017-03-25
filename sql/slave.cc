@@ -1077,6 +1077,7 @@ void slave_prepare_for_shutdown()
   mysql_mutex_lock(&LOCK_active_mi);
   master_info_index->free_connections();
   mysql_mutex_unlock(&LOCK_active_mi);
+  stop_slave_background_thread();
 }
 
 /*
