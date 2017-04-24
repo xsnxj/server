@@ -715,7 +715,8 @@ public:
     TIMESTAMP_OLD_FIELD=18,     // TIMESTAMP created before 4.1.3
     TIMESTAMP_DN_FIELD=21,      // TIMESTAMP DEFAULT NOW()
     TIMESTAMP_UN_FIELD=22,      // TIMESTAMP ON UPDATE NOW()
-    TIMESTAMP_DNUN_FIELD=23     // TIMESTAMP DEFAULT NOW() ON UPDATE NOW()
+    TIMESTAMP_DNUN_FIELD=23,    // TIMESTAMP DEFAULT NOW() ON UPDATE NOW()
+    TMYSQL_COMPRESSED= 24,      // Compatibility with TMySQL
     };
   enum geometry_type
   {
@@ -1478,6 +1479,8 @@ public:
   /* Mark field in read map. Updates also virtual fields */
   void register_field_in_read_map();
 
+  virtual uchar compression_method() const { return 0; }
+
   friend int cre_myisam(char * name, register TABLE *form, uint options,
 			ulonglong auto_increment_value);
   friend class Copy_field;
@@ -1660,7 +1663,7 @@ public:
            charset() == from->charset();
   }
   int  store(double nr);
-  int  store(longlong nr, bool unsigned_val)=0;
+  int  store(longlong nr, bool unsigned_val);
   int  store_decimal(const my_decimal *);
   int  store(const char *to,uint length,CHARSET_INFO *cs)=0;
   int  store_hex_hybrid(const char *str, uint length)
@@ -1714,6 +1717,11 @@ protected:
                                          const Item *item) const;
   bool cmp_to_string_with_stricter_collation(const Item_bool_func *cond,
                                              const Item *item) const;
+  int compress_zlib(char *to, uint *to_length,
+                    const char *from, uint length,
+                    CHARSET_INFO *cs);
+  String *uncompress_zlib(String *val_buffer, String *val_ptr,
+                          const uchar *from, size_t from_length);
 public:
   Field_longstr(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
                 uchar null_bit_arg, utype unireg_check_arg,
@@ -3032,8 +3040,7 @@ public:
     return 0;
   }
   int store(const char *to,uint length,CHARSET_INFO *charset);
-  int store(longlong nr, bool unsigned_val);
-  int store(double nr) { return Field_str::store(nr); } /* QQ: To be deleted */
+  using Field_str::store;
   double val_real(void);
   longlong val_int(void);
   String *val_str(String*,String *);
@@ -3072,6 +3079,7 @@ private:
 
 
 class Field_varstring :public Field_longstr {
+protected:
   uchar *get_data() const
   {
     return ptr + length_bytes;
@@ -3079,6 +3087,13 @@ class Field_varstring :public Field_longstr {
   uint get_length() const
   {
     return length_bytes == 1 ? (uint) *ptr : uint2korr(ptr);
+  }
+  void store_length(uint32 number)
+  {
+    if (length_bytes == 1)
+      *ptr= (uchar) number;
+    else
+      int2store(ptr, number);
   }
 public:
   /*
@@ -3125,11 +3140,11 @@ public:
   bool memcpy_field_possible(const Field *from) const
   {
     return Field_str::memcpy_field_possible(from) &&
+           !compression_method() == !from->compression_method() &&
            length_bytes == ((Field_varstring*) from)->length_bytes;
   }
   int  store(const char *to,uint length,CHARSET_INFO *charset);
-  int  store(longlong nr, bool unsigned_val);
-  int  store(double nr) { return Field_str::store(nr); } /* QQ: To be deleted */
+  using Field_str::store;
   double val_real(void);
   longlong val_int(void);
   String *val_str(String*,String *);
@@ -3165,6 +3180,45 @@ public:
   uint length_size() { return length_bytes; }
 private:
   int do_save_field_metadata(uchar *first_byte);
+};
+
+
+class Field_varstring_compressed: public Field_varstring {
+public:
+  Field_varstring_compressed(uchar *ptr_arg,
+                             uint32 len_arg, uint length_bytes_arg,
+                             uchar *null_ptr_arg, uchar null_bit_arg,
+                             enum utype unireg_check_arg,
+                             const char *field_name_arg,
+                             TABLE_SHARE *share, CHARSET_INFO *cs):
+    Field_varstring(ptr_arg, len_arg, length_bytes_arg, null_ptr_arg,
+                    null_bit_arg, unireg_check_arg, field_name_arg,
+                    share, cs) { DBUG_ASSERT(len_arg > 0); }
+  uchar compression_method() const { return 8; }
+private:
+  int store(const char *to, uint length, CHARSET_INFO *charset);
+  using Field_str::store;
+  String *val_str(String *, String *);
+  double val_real(void);
+  longlong val_int(void);
+
+  /*
+    Compressed fields can't have keys as two rows may have different
+    compression methods or compression levels.
+  */
+
+  uint get_key_image(uchar *buff, uint length, imagetype type_arg)
+  { DBUG_ASSERT(0); return 0; }
+  void set_key_image(const uchar *buff, uint length)
+  { DBUG_ASSERT(0); }
+  int key_cmp(const uchar *a, const uchar *b)
+  { DBUG_ASSERT(0); return 0; }
+  int key_cmp(const uchar *str, uint length)
+  { DBUG_ASSERT(0); return 0; }
+  Field *new_key_field(MEM_ROOT *root, TABLE *new_table,
+                       uchar *new_ptr, uint32 length,
+                       uchar *new_null_ptr, uint new_null_bit)
+  { DBUG_ASSERT(0); return 0; }
 };
 
 
@@ -3228,7 +3282,8 @@ public:
     if (from->type() == MYSQL_TYPE_BIT)
       return do_field_int;
     */
-    if (!(from->flags & BLOB_FLAG) || from->charset() != charset())
+    if (!(from->flags & BLOB_FLAG) || from->charset() != charset() ||
+        !from->compression_method() != !compression_method())
       return do_conv_blob;
     if (from->pack_length() != Field_blob::pack_length())
       return do_copy_blob;
@@ -3245,11 +3300,11 @@ public:
   bool memcpy_field_possible(const Field *from) const
   {
     return Field_str::memcpy_field_possible(from) &&
+           !compression_method() == !from->compression_method() &&
            !table->copy_blobs;
   }
-  int  store(const char *to,uint length,CHARSET_INFO *charset);
-  int  store(double nr);
-  int  store(longlong nr, bool unsigned_val);
+  int store(const char *to, uint length, CHARSET_INFO *charset);
+  using Field_str::store;
   double val_real(void);
   longlong val_int(void);
   String *val_str(String*,String *);
@@ -3384,6 +3439,42 @@ public:
   uint is_equal(Create_field *new_field);
 private:
   int do_save_field_metadata(uchar *first_byte);
+};
+
+
+class Field_blob_compressed: public Field_blob {
+public:
+  Field_blob_compressed(uchar *ptr_arg, uchar *null_ptr_arg,
+                        uchar null_bit_arg, enum utype unireg_check_arg,
+                        const char *field_name_arg, TABLE_SHARE *share,
+                        uint blob_pack_length, CHARSET_INFO *cs):
+    Field_blob(ptr_arg, null_ptr_arg, null_bit_arg, unireg_check_arg,
+               field_name_arg, share, blob_pack_length, cs) {}
+  uchar compression_method() const { return 8; }
+private:
+  int store(const char *to, uint length, CHARSET_INFO *charset);
+  using Field_str::store;
+  String *val_str(String *, String *);
+  double val_real(void);
+  longlong val_int(void);
+
+  /*
+    Compressed fields can't have keys as two rows may have different
+    compression methods or compression levels.
+  */
+
+  uint get_key_image(uchar *buff, uint length, imagetype type_arg)
+  { DBUG_ASSERT(0); return 0; }
+  void set_key_image(const uchar *buff, uint length)
+  { DBUG_ASSERT(0); }
+  int key_cmp(const uchar *a, const uchar *b)
+  { DBUG_ASSERT(0); return 0; }
+  int key_cmp(const uchar *str, uint length)
+  { DBUG_ASSERT(0); return 0; }
+  Field *new_key_field(MEM_ROOT *root, TABLE *new_table,
+                       uchar *new_ptr, uint32 length,
+                       uchar *new_null_ptr, uint new_null_bit)
+  { DBUG_ASSERT(0); return 0; }
 };
 
 
@@ -3953,6 +4044,17 @@ public:
   void set_column_definition(const Column_definition *def)
   {
     *this= *def;
+  }
+  bool set_compressed(const char *method);
+  uchar compression_method() const
+  {
+    /* We can't use f_is_blob here as pack_flag is not yet set */
+    if ((sql_type == MYSQL_TYPE_VARCHAR || sql_type == MYSQL_TYPE_TINY_BLOB ||
+         sql_type == MYSQL_TYPE_BLOB || sql_type == MYSQL_TYPE_MEDIUM_BLOB ||
+         sql_type == MYSQL_TYPE_LONG_BLOB) &&
+        unireg_check == Field::TMYSQL_COMPRESSED)
+      return 8;
+    return 0;
   }
 };
 
