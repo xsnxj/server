@@ -184,6 +184,7 @@ public:
   char last_error[MYSQL_ERRMSG_SIZE];
   my_bool iterations;
   my_bool start_param;
+  my_bool read_types;
 #ifndef EMBEDDED_LIBRARY
   bool (*set_params)(Prepared_statement *st, uchar *data, uchar *data_end,
                      uchar *read_pos, String *expanded_query);
@@ -934,6 +935,7 @@ static bool insert_params(Prepared_statement *stmt, uchar *null_array,
   for (Item_param **it= begin; it < end; ++it)
   {
     Item_param *param= *it;
+    param->indicator= STMT_INDICATOR_NONE; // only for bulk parameters
     if (!param->has_long_data_value())
     {
       if (is_param_null(null_array, (uint) (it - begin)))
@@ -978,10 +980,7 @@ static bool insert_bulk_params(Prepared_statement *stmt,
       param->reset();
     if (!param->has_long_data_value())
     {
-      if (param->indicators)
-        param->indicator= (enum_indicator_type) *((*read_pos)++);
-      else
-        param->indicator= STMT_INDICATOR_NONE;
+      param->indicator= (enum_indicator_type) *((*read_pos)++);
       if ((*read_pos) > data_end)
         DBUG_RETURN(1);
       switch (param->indicator)
@@ -992,6 +991,8 @@ static bool insert_bulk_params(Prepared_statement *stmt,
         param->set_param_func(param, read_pos, (uint) (data_end - (*read_pos)));
         if (param->has_no_value())
           DBUG_RETURN(1);
+        if (param->convert_str_value(stmt->thd))
+          DBUG_RETURN(1);                           /* out of memory */
         break;
       case STMT_INDICATOR_NULL:
         param->set_null();
@@ -1010,6 +1011,36 @@ static bool insert_bulk_params(Prepared_statement *stmt,
   DBUG_RETURN(0);
 }
 
+static bool set_conversion_functions(Prepared_statement *stmt,
+                                     uchar **data, uchar *data_end)
+{
+  uchar *read_pos= *data;
+  const uint signed_bit= 1 << 15;
+  DBUG_ENTER("set_conversion_functions");
+  /*
+     First execute or types altered by the client, setup the
+     conversion routines for all parameters (one time)
+   */
+  Item_param **it= stmt->param_array;
+  Item_param **end= it + stmt->param_count;
+  THD *thd= stmt->thd;
+  for (; it < end; ++it)
+  {
+    ushort typecode;
+
+    if (read_pos >= data_end)
+      DBUG_RETURN(1);
+
+    typecode= sint2korr(read_pos);
+    read_pos+= 2;
+    (**it).unsigned_flag= MY_TEST(typecode & signed_bit);
+    setup_one_conversion_function(thd, *it, (uchar) (typecode & 0xff));
+  }
+  *data= read_pos;
+  DBUG_RETURN(0);
+}
+
+
 static bool setup_conversion_functions(Prepared_statement *stmt,
                                        uchar **data, uchar *data_end,
                                        bool bulk_protocol= 0)
@@ -1023,29 +1054,9 @@ static bool setup_conversion_functions(Prepared_statement *stmt,
 
   if (*read_pos++) //types supplied / first execute
   {
-    const uint signed_bit= 1 << 15;
-    /*
-      First execute or types altered by the client, setup the
-      conversion routines for all parameters (one time)
-    */
-    Item_param **it= stmt->param_array;
-    Item_param **end= it + stmt->param_count;
-    THD *thd= stmt->thd;
-    for (; it < end; ++it)
-    {
-      ushort typecode;
-
-      if (read_pos >= data_end)
-        DBUG_RETURN(1);
-
-      typecode= sint2korr(read_pos);
-      read_pos+= 2;
-      (**it).unsigned_flag= MY_TEST(typecode & signed_bit);
-      if (bulk_protocol)
-        (**it).indicators= TRUE;
-      setup_one_conversion_function(thd, *it,
-                                    (uchar) (typecode & 0xff));
-    }
+    *data= read_pos;
+    bool res= set_conversion_functions(stmt, data, data_end);
+    DBUG_RETURN(res);
   }
   *data= read_pos;
   DBUG_RETURN(0);
@@ -3035,7 +3046,8 @@ static void mysql_stmt_execute_common(THD *thd,
                                       uchar *packet,
                                       uchar *packet_end,
                                       ulong cursor_flags,
-                                      bool iteration);
+                                      bool iteration,
+                                      bool types);
 
 /**
   COM_STMT_EXECUTE handler: execute a previously prepared statement.
@@ -3064,7 +3076,8 @@ void mysqld_stmt_execute(THD *thd, char *packet_arg, uint packet_length)
 
   packet+= 9;                               /* stmt_id + 5 bytes of flags */
 
-  mysql_stmt_execute_common(thd, stmt_id, packet, packet_end, flags, FALSE);
+  mysql_stmt_execute_common(thd, stmt_id, packet, packet_end, flags, FALSE,
+  FALSE);
   DBUG_VOID_RETURN;
 }
 
@@ -3090,7 +3103,7 @@ void mysqld_stmt_bulk_execute(THD *thd, char *packet_arg, uint packet_length)
 {
   uchar *packet= (uchar*)packet_arg; // GCC 4.0.1 workaround
   ulong stmt_id= uint4korr(packet);
-  ulong flags= (ulong) uint2korr(packet + 4);
+  uint flags= (uint) uint2korr(packet + 4);
   uchar *packet_end= packet + packet_length;
   DBUG_ENTER("mysqld_stmt_execute_bulk");
 
@@ -3104,19 +3117,14 @@ void mysqld_stmt_bulk_execute(THD *thd, char *packet_arg, uint packet_length)
   /* Check for implemented parameters */
   if (flags & (~STMT_BULK_FLAG_CLIENT_SEND_TYPES))
   {
-    DBUG_PRINT("error", ("unsupported bulk execute flags %lx", flags));
+    DBUG_PRINT("error", ("unsupported bulk execute flags %x", flags));
     my_error(ER_UNSUPPORTED_PS, MYF(0));
   }
 
-  /* stmt id and one byte of flegs (other will be used for emulation) */
-  packet+= 4 + 2 - 1;
-  /*
-    Emulate all command buffer, where there was a bit before parameter
-    which tell if there is type following
-  */
-  packet[0]= MY_TEST(flags & STMT_BULK_FLAG_CLIENT_SEND_TYPES);
-
-  mysql_stmt_execute_common(thd, stmt_id, packet, packet_end, 0, TRUE);
+  /* stmt id and two bytes of flags */
+  packet+= 4 + 2;
+  mysql_stmt_execute_common(thd, stmt_id, packet, packet_end, 0, TRUE,
+                            (flags & STMT_BULK_FLAG_CLIENT_SEND_TYPES));
   DBUG_VOID_RETURN;
 }
 
@@ -3129,7 +3137,8 @@ void mysqld_stmt_bulk_execute(THD *thd, char *packet_arg, uint packet_length)
   @param paket           packet with parameters to bind
   @param packet_end      pointer to the byte after parameters end
   @param cursor_flags    cursor flags
-  @param bulk_op
+  @param bulk_op         id it bulk operation
+  @param read_types      flag say that types muast been read
 */
 
 static void mysql_stmt_execute_common(THD *thd,
@@ -3137,7 +3146,8 @@ static void mysql_stmt_execute_common(THD *thd,
                                       uchar *packet,
                                       uchar *packet_end,
                                       ulong cursor_flags,
-                                      bool bulk_op)
+                                      bool bulk_op,
+                                      bool read_types)
 {
   /* Query text for binary, general or slow log, if any of them is open */
   String expanded_query;
@@ -3145,6 +3155,7 @@ static void mysql_stmt_execute_common(THD *thd,
   Protocol *save_protocol= thd->protocol;
   bool open_cursor;
   DBUG_ENTER("mysqld_stmt_execute_common");
+  DBUG_ASSERT((!read_types) || (read_types && bulk_op));
 
   /* First of all clear possible warnings from the previous command */
   thd->reset_for_next_command();
@@ -3156,6 +3167,7 @@ static void mysql_stmt_execute_common(THD *thd,
              llstr(stmt_id, llbuf), "mysqld_stmt_execute");
     DBUG_VOID_RETURN;
   }
+  stmt->read_types= read_types;
 
 #if defined(ENABLED_PROFILING)
   thd->profiling.set_query_source(stmt->query(), stmt->query_length());
@@ -3681,6 +3693,7 @@ Prepared_statement::Prepared_statement(THD *thd_arg)
   flags((uint) IS_IN_USE),
   iterations(0),
   start_param(0),
+  read_types(0),
   m_sql_mode(thd->variables.sql_mode)
 {
   init_sql_alloc(&main_mem_root, thd_arg->variables.query_alloc_block_size,
@@ -3717,7 +3730,7 @@ void Prepared_statement::setup_set_params()
     set_params_from_actual_params= insert_params_from_actual_params_with_log;
 #ifndef EMBEDDED_LIBRARY
     set_params= insert_params_with_log;
-    set_bulk_params= insert_bulk_params; // TODO: add binlog support
+    set_bulk_params= insert_bulk_params; // RBR is on for bulk operation
 #else
     //TODO: add bulk support for bulk parameters
     set_params_data= emb_insert_params_with_log;
@@ -4202,7 +4215,7 @@ my_bool bulk_parameters_set(THD *thd)
   DBUG_RETURN(FALSE);
 }
 
-ulong bulk_parameters_iterations(THD *thd)
+my_bool bulk_parameters_iterations(THD *thd)
 {
   Prepared_statement *stmt= (Prepared_statement *) thd->bulk_param;
   if (!stmt)
@@ -4215,6 +4228,7 @@ my_bool Prepared_statement::set_bulk_parameters(bool reset)
 {
   DBUG_ENTER("Prepared_statement::set_bulk_parameters");
   DBUG_PRINT("info", ("iteration: %d", iterations));
+
   if (iterations)
   {
 #ifndef EMBEDDED_LIBRARY
@@ -4259,16 +4273,26 @@ Prepared_statement::execute_bulk_loop(String *expanded_query,
     thd->set_bulk_execution(0);
     return TRUE;
   }
+  /* Check for non zero parameter count*/
+  if (param_count == 0)
+  {
+    DBUG_PRINT("error", ("Statement with no parameters for bulk execution."));
+    my_error(ER_UNSUPPORTED_PS, MYF(0));
+    thd->set_bulk_execution(0);
+    return TRUE;
+  }
 
   if (!(sql_command_flags[lex->sql_command] & CF_SP_BULK_SAFE))
   {
+    DBUG_PRINT("error", ("Command is not supported in bulk execution."));
     my_error(ER_UNSUPPORTED_PS, MYF(0));
     thd->set_bulk_execution(0);
     return TRUE;
   }
 
 #ifndef EMBEDDED_LIBRARY
-  if (setup_conversion_functions(this, &packet, packet_end, TRUE))
+  if (read_types &&
+      set_conversion_functions(this, &packet, packet_end))
 #else
   // bulk parameters are not supported for embedded, so it will an error
 #endif
@@ -4279,6 +4303,7 @@ Prepared_statement::execute_bulk_loop(String *expanded_query,
     thd->set_bulk_execution(0);
     return true;
   }
+  read_types= FALSE;
 
 #ifdef NOT_YET_FROM_MYSQL_5_6
   if (unlikely(thd->security_ctx->password_expired &&

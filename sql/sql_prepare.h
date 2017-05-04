@@ -84,7 +84,7 @@ void mysqld_stmt_reset(THD *thd, char *packet);
 void mysql_stmt_get_longdata(THD *thd, char *pos, ulong packet_length);
 void reinit_stmt_before_use(THD *thd, LEX *lex);
 
-ulong bulk_parameters_iterations(THD *thd);
+my_bool bulk_parameters_iterations(THD *thd);
 my_bool bulk_parameters_set(THD *thd);
 /**
   Execute a fragment of server code in an isolated context, so that

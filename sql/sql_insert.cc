@@ -939,7 +939,6 @@ bool mysql_insert(THD *thd,TABLE_LIST *table_list,
   do
   {
     DBUG_PRINT("info", ("iteration %llu", iteration));
-    /* for 0 iteration parameters are already set */
     if (iteration && bulk_parameters_set(thd))
       goto abort;
 
