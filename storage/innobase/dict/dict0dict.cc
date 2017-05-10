@@ -1178,11 +1178,23 @@ dict_table_open_on_name(
 
 	if (table != NULL) {
 
-		/* If table is encrypted return table */
+		/* If table is encrypted or corrupted */
 		if (ignore_err == DICT_ERR_IGNORE_NONE
-			&& table->is_encrypted) {
+		    && !table->is_readable()) {
 			/* Make life easy for drop table. */
 			dict_table_prevent_eviction(table);
+
+			if (table->corrupted) {
+
+				ib::error() << "Table " << table->name
+					<< " is corrupted. Please "
+					"drop the table and recreate.";
+				if (!dict_locked) {
+					mutex_exit(&dict_sys->mutex);
+				}
+
+				DBUG_RETURN(NULL);
+			}
 
 			if (table->can_be_evicted) {
 				dict_move_to_mru(table);
@@ -1195,22 +1207,6 @@ dict_table_open_on_name(
 			}
 
 			DBUG_RETURN(table);
-		}
-		/* If table is corrupted, return NULL */
-		else if (ignore_err == DICT_ERR_IGNORE_NONE
-		    && table->corrupted) {
-			/* Make life easy for drop table. */
-			dict_table_prevent_eviction(table);
-			if (!dict_locked) {
-				mutex_exit(&dict_sys->mutex);
-			}
-
-			ib::info() << "Table "
-				<< table->name
-				<< " is corrupted. Please drop the table"
-				" and recreate it";
-
-			DBUG_RETURN(NULL);
 		}
 
 		if (table->can_be_evicted) {
@@ -6067,9 +6063,27 @@ dict_set_corrupted_by_space(
 
 	/* mark the table->corrupted bit only, since the caller
 	could be too deep in the stack for SYS_INDEXES update */
-	table->corrupted = TRUE;
+	table->corrupted = true;
+	table->file_unreadable = true;
 
 	return(TRUE);
+}
+
+
+/** Flag a table with specified space_id encrypted in the data dictionary
+cache
+@param[in]	space_id	Tablespace id */
+UNIV_INTERN
+void
+dict_set_encrypted_by_space(ulint	space_id)
+{
+	dict_table_t*   table;
+
+	table = dict_find_single_table_by_space(space_id);
+
+	if (table) {
+		table->file_unreadable = true;
+	}
 }
 
 /**********************************************************************//**
@@ -6581,7 +6595,8 @@ dict_table_schema_check(
 		}
 	}
 
-	if (table->ibd_file_missing) {
+	if (!table->is_readable() &&
+	    fil_space_get(table->space) == NULL) {
 		/* missing tablespace */
 
 		ut_snprintf(errstr, errstr_sz,
@@ -6596,7 +6611,7 @@ dict_table_schema_check(
 	if ((ulint) table->n_def - n_sys_cols != req_schema->n_cols) {
 		/* the table has a different number of columns than required */
 		ut_snprintf(errstr, errstr_sz,
-			    "%s has %lu columns but should have %lu.",
+			    "%s has %lu columns but should have " ULINTPF ".",
 			    ut_format_name(req_schema->table_name,
 					   buf, sizeof(buf)),
 			    table->n_def - n_sys_cols,
@@ -6694,7 +6709,7 @@ dict_table_schema_check(
 		ut_snprintf(
 			errstr, errstr_sz,
 			"Table %s has " ULINTPF " foreign key(s) pointing"
-			" to other tables, but it must have %lu.",
+			" to other tables, but it must have " ULINTPF ".",
 			ut_format_name(req_schema->table_name,
 				       buf, sizeof(buf)),
 			static_cast<ulint>(table->foreign_set.size()),
@@ -6706,7 +6721,7 @@ dict_table_schema_check(
 		ut_snprintf(
 			errstr, errstr_sz,
 			"There are " ULINTPF " foreign key(s) pointing to %s, "
-			"but there must be %lu.",
+			"but there must be " ULINTPF ".",
 			static_cast<ulint>(table->referenced_set.size()),
 			ut_format_name(req_schema->table_name,
 				       buf, sizeof(buf)),
@@ -6746,7 +6761,7 @@ dict_fs2utf8(
 
 	strconvert(
 		&my_charset_filename, db, db_len, system_charset_info,
-		db_utf8, db_utf8_size, &errors);
+		db_utf8, uint(db_utf8_size), &errors);
 
 	/* convert each # to @0023 in table name and store the result in buf */
 	const char*	table = dict_remove_db_name(db_and_table);
@@ -6773,7 +6788,7 @@ dict_fs2utf8(
 	strconvert(
 		&my_charset_filename, buf, (uint) (buf_p - buf),
 		system_charset_info,
-		table_utf8, table_utf8_size,
+		table_utf8, uint(table_utf8_size),
 		&errors);
 
 	if (errors != 0) {

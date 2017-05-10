@@ -57,3 +57,17 @@ unique_sec : Intermittent failures in BB
 allow_no_pk_concurrent_insert: stress test
 rocksdb_deadlock_stress_rc: stress test
 rocksdb_deadlock_stress_rr: stress test
+
+# MDEV-12474 Regularly failing tests on Buildbot
+autoinc_vars_thread : MDEV-12474 Regularly fails on buildbot
+validate_datadic : MDEV-12474 Regularly fails on buildbot
+unique_check : MDEV-12474 Regularly fails on buildbot
+bloomfilter : MDEV-12474 Regularly fails on buildbot
+
+compact_deletes: MDEV-12663 : rocksdb.compact_deletes times out and causes other tests to fail
+
+col_opt_not_null : MDEV-12474 - Fails in fulltest
+col_opt_null :   : MDEV-12474 - Fails in fulltest
+col_opt_unsigned : MDEV-12474 - Fails in fulltest
+col_opt_zerofill : MDEV-12474 - Fails in fulltest
+type_float       : MDEV-12474 - Fails in fulltest

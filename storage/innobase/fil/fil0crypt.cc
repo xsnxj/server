@@ -1,6 +1,6 @@
 /*****************************************************************************
 Copyright (C) 2013, 2015, Google Inc. All Rights Reserved.
-Copyright (c) 2014, 2017, MariaDB Corporation. All Rights Reserved.
+Copyright (c) 2014, 2017, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -444,11 +444,12 @@ Parse a MLOG_FILE_WRITE_CRYPT_DATA log entry
 @param[in]	block		buffer block
 @return position on log buffer */
 UNIV_INTERN
-const byte*
+byte*
 fil_parse_write_crypt_data(
-	const byte*		ptr,
+	byte*			ptr,
 	const byte*		end_ptr,
-	const buf_block_t*	block)
+	const buf_block_t*	block,
+	dberr_t*		err)
 {
 	/* check that redo log entry is complete */
 	uint entry_size =
@@ -459,6 +460,8 @@ fil_parse_write_crypt_data(
 		4 +  // size of min_key_version
 		4 +  // size of key_id
 		1; // fil_encryption_t
+
+	*err = DB_SUCCESS;
 
 	if (ptr + entry_size > end_ptr) {
 		return NULL;
@@ -499,11 +502,16 @@ fil_parse_write_crypt_data(
 	ptr += len;
 
 	/* update fil_space memory cache with crypt_data */
-	fil_space_t* space = fil_space_acquire_silent(space_id);
-
-	if (space) {
+	if (fil_space_t* space = fil_space_acquire_silent(space_id)) {
 		crypt_data = fil_space_set_crypt_data(space, crypt_data);
 		fil_space_release(space);
+		/* Check is used key found from encryption plugin */
+		if (crypt_data->should_encrypt()
+		    && !crypt_data->is_key_found()) {
+			*err = DB_DECRYPTION_FAILED;
+		}
+	} else {
+		fil_space_destroy_crypt_data(&crypt_data);
 	}
 
 	return ptr;
@@ -629,7 +637,7 @@ fil_space_encrypt(
 
 	fil_space_crypt_t* crypt_data = space->crypt_data;
 	const page_size_t	page_size(space->flags);
-	ut_ad(space->n_pending_ops);
+	ut_ad(space->n_pending_ios > 0);
 	byte* tmp = fil_encrypt_buf(crypt_data, space->id, offset, lsn,
 				    src_frame, page_size, dst_frame);
 
@@ -647,7 +655,8 @@ fil_space_encrypt(
 			comp_mem = (byte *)malloc(UNIV_PAGE_SIZE);
 			uncomp_mem = (byte *)malloc(UNIV_PAGE_SIZE);
 			memcpy(comp_mem, src_frame, UNIV_PAGE_SIZE);
-			fil_decompress_page(uncomp_mem, comp_mem, page_size.physical(), NULL);
+			fil_decompress_page(uncomp_mem, comp_mem,
+					    srv_page_size, NULL);
 			src = uncomp_mem;
 		}
 
@@ -657,14 +666,17 @@ fil_space_encrypt(
 		/* Need to decompress the page if it was also compressed */
 		if (page_compressed_encrypted) {
 			memcpy(comp_mem, tmp_mem, UNIV_PAGE_SIZE);
-			fil_decompress_page(tmp_mem, comp_mem, page_size.physical(), NULL);
+			fil_decompress_page(tmp_mem, comp_mem,
+					    srv_page_size, NULL);
 		}
 
 		bool corrupted = buf_page_is_corrupted(true, tmp_mem, page_size, space);
+		memcpy(tmp_mem+FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, src+FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, 8);
 		bool different = memcmp(src, tmp_mem, page_size.physical());
 
 		if (!ok || corrupted || corrupted1 || err != DB_SUCCESS || different) {
-			fprintf(stderr, "ok %d corrupted %d corrupted1 %d err %d different %d\n", ok , corrupted, corrupted1, err, different);
+			fprintf(stderr, "ok %d corrupted %d corrupted1 %d err %d different %d\n",
+				ok , corrupted, corrupted1, err, different);
 			fprintf(stderr, "src_frame\n");
 			buf_page_print(src_frame, page_size, BUF_PAGE_PRINT_NO_CRASH);
 			fprintf(stderr, "encrypted_frame\n");
@@ -717,26 +729,6 @@ fil_space_decrypt(
 		return false;
 	}
 
-	if (crypt_data == NULL) {
-		if (!(space == 0 && offset == 0) && key_version != 0) {
-			/* FIL_PAGE_FILE_FLUSH_LSN field i.e.
-			FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
-			should be only defined for the
-			first page in a system tablespace
-			data file (ibdata*, not *.ibd), if not
-			clear it. */
-
-			DBUG_LOG("crypt",
-				 "Page " << page_id_t(space, offset)
-				 << " carries key_version " << key_version
-				 << " (should be undefined)");
-
-			mach_write_to_4(src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, 0);
-		}
-
-		return false;
-	}
-
 	ut_a(crypt_data != NULL && crypt_data->is_encrypted());
 
 	/* read space & lsn */
@@ -786,9 +778,6 @@ fil_space_decrypt(
 		memcpy(tmp_frame + page_size.physical() - FIL_PAGE_DATA_END,
 		       src_frame + page_size.physical() - FIL_PAGE_DATA_END,
 		       FIL_PAGE_DATA_END);
-
-		// clear key-version & crypt-checksum from dst
-		memset(tmp_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, 0, 8);
 	}
 
 	srv_stats.pages_decrypted.inc();
@@ -818,7 +807,7 @@ fil_space_decrypt(
 	*decrypted = false;
 
 	ut_ad(space->crypt_data != NULL && space->crypt_data->is_encrypted());
-	ut_ad(space->n_pending_ops > 0);
+	ut_ad(space->n_pending_ios > 0);
 
 	bool encrypted = fil_space_decrypt(space->crypt_data, tmp_frame,
 					   page_size, src_frame, &err);
@@ -1015,7 +1004,8 @@ fil_crypt_start_encrypting_space(
 	do
 	{
 		mtr_t mtr;
-		mtr_start(&mtr);
+		mtr.start();
+		mtr.set_named_space(space);
 
 		/* 2 - get page 0 */
 		dberr_t err = DB_SUCCESS;
@@ -1031,7 +1021,7 @@ fil_crypt_start_encrypting_space(
 		crypt_data->type = CRYPT_SCHEME_1;
 		crypt_data->write_page0(space, frame, &mtr);
 
-		mtr_commit(&mtr);
+		mtr.commit();
 
 		/* record lsn of update */
 		lsn_t end_lsn = mtr.commit_lsn();
@@ -1305,26 +1295,28 @@ fil_crypt_realloc_iops(
 
 	if (10 * state->cnt_waited > state->batch) {
 		/* if we waited more than 10% re-estimate max_iops */
-		uint avg_wait_time_us =
+		ulint avg_wait_time_us =
 			state->sum_waited_us / state->cnt_waited;
-
-		DBUG_PRINT("ib_crypt",
-			("thr_no: %u - update estimated_max_iops from %u to %u.",
-			state->thread_no,
-			state->estimated_max_iops,
-			1000000 / avg_wait_time_us));
 
 		if (avg_wait_time_us == 0) {
 			avg_wait_time_us = 1; // prevent division by zero
 		}
 
-		state->estimated_max_iops = 1000000 / avg_wait_time_us;
+		DBUG_PRINT("ib_crypt",
+			("thr_no: %u - update estimated_max_iops from %u to "
+			 ULINTPF ".",
+			state->thread_no,
+			state->estimated_max_iops,
+			1000000 / avg_wait_time_us));
+
+		state->estimated_max_iops = uint(1000000 / avg_wait_time_us);
 		state->cnt_waited = 0;
 		state->sum_waited_us = 0;
 	} else {
 
 		DBUG_PRINT("ib_crypt",
-			("thr_no: %u only waited %lu%% skip re-estimate.",
+			("thr_no: %u only waited " ULINTPF
+			 "%% skip re-estimate.",
 			state->thread_no,
 			(100 * state->cnt_waited) / state->batch));
 	}
@@ -1552,33 +1544,27 @@ fil_crypt_find_page_to_rotate(
 
 	fil_space_crypt_t *crypt_data = space->crypt_data;
 
-	/* Space might already be dropped */
-	if (crypt_data) {
-		mutex_enter(&crypt_data->mutex);
-		ut_ad(key_state->key_id == crypt_data->key_id);
+	mutex_enter(&crypt_data->mutex);
+	ut_ad(key_state->key_id == crypt_data->key_id);
 
-		if (crypt_data->rotate_state.next_offset <
-		    crypt_data->rotate_state.max_offset) {
+	bool found = crypt_data->rotate_state.max_offset >=
+		crypt_data->rotate_state.next_offset;
 
-			state->offset = crypt_data->rotate_state.next_offset;
-			ulint remaining = crypt_data->rotate_state.max_offset -
-				crypt_data->rotate_state.next_offset;
+	if (found) {
+		state->offset = crypt_data->rotate_state.next_offset;
+		ulint remaining = crypt_data->rotate_state.max_offset -
+			crypt_data->rotate_state.next_offset;
 
-			if (batch <= remaining) {
-				state->batch = batch;
-			} else {
-				state->batch = remaining;
-			}
-
-			crypt_data->rotate_state.next_offset += batch;
-			mutex_exit(&crypt_data->mutex);
-			return true;
+		if (batch <= remaining) {
+			state->batch = batch;
+		} else {
+			state->batch = remaining;
 		}
-
-		mutex_exit(&crypt_data->mutex);
 	}
 
-	return false;
+	crypt_data->rotate_state.next_offset += batch;
+	mutex_exit(&crypt_data->mutex);
+	return found;
 }
 
 /***********************************************************************
@@ -1767,27 +1753,26 @@ fil_crypt_rotate_page(
 		return;
 	}
 
-	if (space == TRX_SYS_SPACE && offset == TRX_SYS_PAGE_NO) {
+	if (space_id == TRX_SYS_SPACE && offset == TRX_SYS_PAGE_NO) {
 		/* don't encrypt this as it contains address to dblwr buffer */
 		return;
 	}
 
 	mtr_t mtr;
-	mtr_start(&mtr);
-	buf_block_t* block = fil_crypt_get_page_throttle(state,
-							 offset, &mtr,
-							 &sleeptime_ms);
-
-	if (block) {
+	mtr.start();
+	if (buf_block_t* block = fil_crypt_get_page_throttle(state,
+							     offset, &mtr,
+							     &sleeptime_ms)) {
+		mtr.set_named_space(space);
 
 		bool modified = false;
 		int needs_scrubbing = BTR_SCRUB_SKIP_PAGE;
 		lsn_t block_lsn = block->page.newest_modification;
-		uint kv =  block->page.key_version;
+		byte* frame = buf_block_get_frame(block);
+		uint kv =  mach_read_from_4(frame+FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION);
 
 		/* check if tablespace is closing after reading page */
-		if (space->is_stopping()) {
-			byte* frame = buf_block_get_frame(block);
+		if (!space->is_stopping()) {
 
 			if (kv == 0 &&
 				fil_crypt_is_page_uninitialized(frame, page_size)) {
@@ -1797,11 +1782,6 @@ fil_crypt_rotate_page(
 					kv, key_state->key_version,
 					key_state->rotate_key_age)) {
 
-				/* page can be "fresh" i.e never written in case
-				* kv == 0 or it should have a key version at least
-				* as big as the space minimum key version*/
-				ut_a(kv == 0 || kv >= crypt_data->min_key_version);
-
 				modified = true;
 
 				/* force rotation by dummy updating page */
@@ -1809,16 +1789,10 @@ fil_crypt_rotate_page(
 					FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID,
 					space_id, MLOG_4BYTES, &mtr);
 
-				/* update block */
-				block->page.key_version = key_state->key_version;
-
 				/* statistics */
 				state->crypt_stat.pages_modified++;
 			} else {
 				if (crypt_data->is_encrypted()) {
-					ut_a(kv >= crypt_data->min_key_version ||
-						(kv == 0 && key_state->key_version == 0));
-
 					if (kv < state->min_key_version_found) {
 						state->min_key_version_found = kv;
 					}
@@ -1830,11 +1804,11 @@ fil_crypt_rotate_page(
 				BTR_SCRUB_PAGE_ALLOCATION_UNKNOWN);
 		}
 
-		mtr_commit(&mtr);
+		mtr.commit();
 		lsn_t end_lsn = mtr.commit_lsn();
 
 		if (needs_scrubbing == BTR_SCRUB_PAGE) {
-			mtr_start(&mtr);
+			mtr.start();
 			/*
 			* refetch page and allocation status
 			*/
@@ -1846,6 +1820,7 @@ fil_crypt_rotate_page(
 				&sleeptime_ms);
 
 			if (block) {
+				mtr.set_named_space(space);
 
 				/* get required table/index and index-locks */
 				needs_scrubbing = btr_scrub_recheck_page(
@@ -1903,6 +1878,13 @@ fil_crypt_rotate_page(
 				state->end_lsn = block_lsn;
 			}
 		}
+	} else {
+		/* If block read failed mtr memo and log should be empty. */
+		ut_ad(!mtr.has_modifications());
+		ut_ad(!mtr.is_dirty());
+		ut_ad(mtr.get_memo()->size() == 0);
+		ut_ad(mtr.get_log()->size() == 0);
+		mtr.commit();
 	}
 
 	if (sleeptime_ms) {
@@ -2000,6 +1982,7 @@ fil_crypt_flush_space(
 		    page_id_t(space->id, 0), page_size_t(space->flags),
 		    RW_X_LATCH, NULL, BUF_GET,
 		    __FILE__, __LINE__, &mtr, &err)) {
+		mtr.set_named_space(space);
 		crypt_data->write_page0(space, block->frame, &mtr);
 	}
 
@@ -2086,6 +2069,11 @@ fil_crypt_complete_rotate_space(
 			crypt_data->rotate_state.flushing = false;
 			mutex_exit(&crypt_data->mutex);
 		}
+	} else {
+		mutex_enter(&crypt_data->mutex);
+		ut_a(crypt_data->rotate_state.active_threads > 0);
+		crypt_data->rotate_state.active_threads--;
+		mutex_exit(&crypt_data->mutex);
 	}
 }
 
@@ -2160,7 +2148,7 @@ DECLARE_THREAD(fil_crypt_thread)(
 			fil_crypt_start_rotate_space(&new_state, &thr);
 
 			/* iterate all pages (cooperativly with other threads) */
-			while (!thr.should_shutdown() && thr.space &&
+			while (!thr.should_shutdown() &&
 			       fil_crypt_find_page_to_rotate(&new_state, &thr)) {
 
 				/* rotate a (set) of pages */
@@ -2169,6 +2157,8 @@ DECLARE_THREAD(fil_crypt_thread)(
 				/* If space is marked as stopping, release
 				space and stop rotation. */
 				if (thr.space->is_stopping()) {
+					fil_crypt_complete_rotate_space(
+						&new_state, &thr);
 					fil_space_release(thr.space);
 					thr.space = NULL;
 					break;
@@ -2491,10 +2481,6 @@ bool
 fil_space_verify_crypt_checksum(
 	byte* 			page,
 	const page_size_t&	page_size,
-#ifdef UNIV_INNOCHECKSUM
-	bool			strict_check,	/*!< --strict-check */
-	FILE*			log_file,	/*!< --log */
-#endif /* UNIV_INNOCHECKSUM */
 	ulint			space,
 	ulint			offset)
 {
@@ -2530,36 +2516,29 @@ fil_space_verify_crypt_checksum(
 		return (true);
 	}
 
-	/* Compressed pages use different checksum method. We first store
-	the post encryption checksum on checksum location and after function
-	restore the original. */
+	uint32 cchecksum1, cchecksum2;
+
+	/* Calculate checksums */
 	if (page_size.is_compressed()) {
-		ib_uint32_t old = static_cast<ib_uint32_t>(mach_read_from_4(
-				page + FIL_PAGE_SPACE_OR_CHKSUM));
+		cchecksum1 = page_zip_calc_checksum(
+			page, page_size.physical(),
+			SRV_CHECKSUM_ALGORITHM_CRC32);
 
-		mach_write_to_4(page + FIL_PAGE_SPACE_OR_CHKSUM, checksum);
-
-		bool valid = page_zip_verify_checksum(page,
-						      page_size.physical()
-#ifdef UNIV_INNOCHECKSUM
-						      , offset,
-						      strict_check,
-						      log_file != NULL,
-						      log_file
-#endif
-						      );
-
-		mach_write_to_4(page + FIL_PAGE_SPACE_OR_CHKSUM, old);
-
-		return (valid);
+		cchecksum2 = (cchecksum1 == checksum)
+			? 0
+			: page_zip_calc_checksum(
+				page, page_size.physical(),
+				SRV_CHECKSUM_ALGORITHM_INNODB);
+	} else {
+		cchecksum1 = buf_calc_page_crc32(page);
+		cchecksum2 = (cchecksum1 == checksum)
+			? 0
+			: buf_calc_page_new_checksum(page);
 	}
 
 	/* If stored checksum matches one of the calculated checksums
 	page is not corrupted. */
 
-	ib_uint32_t cchecksum1 = buf_calc_page_crc32(page);
-	ib_uint32_t cchecksum2 = (ib_uint32_t) buf_calc_page_new_checksum(
-				page);
 	bool encrypted = (checksum == cchecksum1 || checksum == cchecksum2
 		|| checksum == BUF_NO_CHECKSUM_MAGIC);
 
@@ -2587,25 +2566,24 @@ fil_space_verify_crypt_checksum(
 	when FIL_PAGE_FILE_FLUSH_LSN does not contain 0.
 	*/
 
-	ulint checksum1 = mach_read_from_4(
-		page + FIL_PAGE_SPACE_OR_CHKSUM);
+	uint32_t checksum1 = mach_read_from_4(page + FIL_PAGE_SPACE_OR_CHKSUM);
+	uint32_t checksum2;
 
-	ulint checksum2 = mach_read_from_4(
-		page + UNIV_PAGE_SIZE - FIL_PAGE_END_LSN_OLD_CHKSUM);
+	bool valid;
 
-#ifdef UNIV_INNOCHECKSUM
-# define CKARGS page, checksum1, checksum2,			\
-		offset, log_file != NULL, log_file, algorithm
-#else
-# define CKARGS page, checksum1, checksum2
-#endif
-
-	bool valid = buf_page_is_checksum_valid_crc32(
-		CKARGS, false
-		/* FIXME: also try the original crc32 that was
-		buggy on big-endian architectures? */)
-		|| buf_page_is_checksum_valid_innodb(CKARGS);
-#undef CKARGS
+	if (page_size.is_compressed()) {
+		valid = checksum1 == cchecksum1;
+		checksum2 = checksum1;
+	} else {
+		checksum2 = mach_read_from_4(
+			page + UNIV_PAGE_SIZE - FIL_PAGE_END_LSN_OLD_CHKSUM);
+		valid = buf_page_is_checksum_valid_crc32(
+			page, checksum1, checksum2, false
+			/* FIXME: also try the original crc32 that was
+			buggy on big-endian architectures? */)
+			|| buf_page_is_checksum_valid_innodb(
+				page, checksum1, checksum2);
+	}
 
 	if (encrypted && valid) {
 		/* If page is encrypted and traditional checksums match,
@@ -2615,7 +2593,7 @@ fil_space_verify_crypt_checksum(
 		fprintf(log_file ? log_file : stderr,
 			"Page " ULINTPF ":" ULINTPF " may be corrupted."
 			" Post encryption checksum %u"
-			" stored [" ULINTPF ":" ULINTPF "] key_version %u\n",
+			" stored [%u:%u] key_version %u\n",
 			space, offset, checksum, checksum1, checksum2,
 			key_version);
 #else /* UNIV_INNOCHECKSUM */

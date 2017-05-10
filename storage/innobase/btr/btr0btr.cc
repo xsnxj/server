@@ -169,8 +169,7 @@ btr_root_block_get(
 
 	if (!block) {
 		if (index && index->table) {
-			index->table->is_encrypted = TRUE;
-			index->table->corrupted = FALSE;
+			index->table->file_unreadable = true;
 
 			ib_push_warning(index->table->thd, DB_DECRYPTION_FAILED,
 				"Table %s in tablespace %lu is encrypted but encryption service or"
@@ -183,6 +182,7 @@ btr_root_block_get(
 	}
 
 	btr_assert_not_corrupted(block, index);
+
 #ifdef UNIV_BTR_DEBUG
 	if (!dict_index_is_ibuf(index)) {
 		const page_t*	root = buf_block_get_frame(block);
@@ -1602,7 +1602,8 @@ btr_page_reorganize_low(
 	/* Copy the PAGE_MAX_TRX_ID or PAGE_ROOT_AUTO_INC. */
 	memcpy(page + (PAGE_HEADER + PAGE_MAX_TRX_ID),
 	       temp_page + (PAGE_HEADER + PAGE_MAX_TRX_ID), 8);
-	/* PAGE_MAX_TRX_ID is unused in clustered index pages,
+	/* PAGE_MAX_TRX_ID is unused in clustered index pages
+	(other than the root where it is repurposed as PAGE_ROOT_AUTO_INC),
 	non-leaf pages, and in temporary tables. It was always
 	zero-initialized in page_create() in all InnoDB versions.
 	PAGE_MAX_TRX_ID must be nonzero on dict_index_is_sec_or_ibuf()
@@ -1981,6 +1982,34 @@ btr_root_raise_and_insert(
 
 		btr_search_move_or_delete_hash_entries(new_block, root_block,
 						       index);
+	}
+
+	if (dict_index_is_sec_or_ibuf(index)) {
+		/* In secondary indexes and the change buffer,
+		PAGE_MAX_TRX_ID can be reset on the root page, because
+		the field only matters on leaf pages, and the root no
+		longer is a leaf page. (Older versions of InnoDB did
+		set PAGE_MAX_TRX_ID on all secondary index pages.) */
+		if (root_page_zip) {
+			byte* p = PAGE_HEADER + PAGE_MAX_TRX_ID + root;
+			memset(p, 0, 8);
+			page_zip_write_header(root_page_zip, p, 8, mtr);
+		} else {
+			mlog_write_ull(PAGE_HEADER + PAGE_MAX_TRX_ID
+				       + root, 0, mtr);
+		}
+	} else {
+		/* PAGE_ROOT_AUTO_INC is only present in the clustered index
+		root page; on other clustered index pages, we want to reserve
+		the field PAGE_MAX_TRX_ID for future use. */
+		if (new_page_zip) {
+			byte* p = PAGE_HEADER + PAGE_MAX_TRX_ID + new_page;
+			memset(p, 0, 8);
+			page_zip_write_header(new_page_zip, p, 8, mtr);
+		} else {
+			mlog_write_ull(PAGE_HEADER + PAGE_MAX_TRX_ID
+				       + new_page, 0, mtr);
+		}
 	}
 
 	/* If this is a pessimistic insert which is actually done to
@@ -2943,7 +2972,7 @@ func_start:
 	btr_page_create(new_block, new_page_zip, cursor->index,
 			btr_page_get_level(page, mtr), mtr);
 	/* Only record the leaf level page splits. */
-	if (btr_page_get_level(page, mtr) == 0) {
+	if (page_is_leaf(page)) {
 		cursor->index->stat_defrag_n_page_split ++;
 		cursor->index->stat_defrag_modified_counter ++;
 		btr_defragment_save_defrag_stats_if_needed(cursor->index);
@@ -5132,9 +5161,9 @@ loop:
 
 			rec = btr_cur_get_rec(&node_cur);
 			fprintf(stderr, "\n"
-				"InnoDB: node ptr child page n:o %lu\n",
-				(ulong) btr_node_ptr_get_child_page_no(
-					rec, offsets));
+				"InnoDB: node ptr child page n:o "
+				ULINTPF "\n",
+				btr_node_ptr_get_child_page_no(rec, offsets));
 
 			fputs("InnoDB: record on page ", stderr);
 			rec_print_new(stderr, rec, offsets);
@@ -5387,7 +5416,7 @@ btr_validate_index(
 
 	page_t*	root = btr_root_get(index, &mtr);
 
-	if (root == NULL && index->table->is_encrypted) {
+	if (root == NULL && !index->is_readable()) {
 		err = DB_DECRYPTION_FAILED;
 		mtr_commit(&mtr);
 		return err;

@@ -1,6 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1994, 2016, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2017, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -214,14 +215,14 @@ ut_print_timestamp(
 
 	GetLocalTime(&cal_tm);
 
-	fprintf(file, "%d-%02d-%02d %02d:%02d:%02d %#llx",
+	fprintf(file, "%d-%02d-%02d %02d:%02d:%02d %#zx",
 		(int) cal_tm.wYear,
 		(int) cal_tm.wMonth,
 		(int) cal_tm.wDay,
 		(int) cal_tm.wHour,
 		(int) cal_tm.wMinute,
 		(int) cal_tm.wSecond,
-		static_cast<ulonglong>(thread_id));
+		thread_id);
 #else
 	struct tm* cal_tm_ptr;
 	time_t	   tm;
@@ -230,7 +231,7 @@ ut_print_timestamp(
 	time(&tm);
 	localtime_r(&tm, &cal_tm);
 	cal_tm_ptr = &cal_tm;
-	fprintf(file, "%d-%02d-%02d %02d:%02d:%02d %#lx",
+	fprintf(file, "%d-%02d-%02d %02d:%02d:%02d %#zx",
 		cal_tm_ptr->tm_year + 1900,
 		cal_tm_ptr->tm_mon + 1,
 		cal_tm_ptr->tm_mday,
@@ -284,26 +285,21 @@ ut_sprintf_timestamp(
 Runs an idle loop on CPU. The argument gives the desired delay
 in microseconds on 100 MHz Pentium + Visual C++.
 @return dummy value */
-ulint
+void
 ut_delay(
 /*=====*/
 	ulint	delay)	/*!< in: delay in microseconds on 100 MHz Pentium */
 {
-	ulint	i, j;
+	ulint	i;
 
 	UT_LOW_PRIORITY_CPU();
 
-	j = 0;
-
 	for (i = 0; i < delay * 50; i++) {
-		j += i;
 		UT_RELAX_CPU();
 		UT_COMPILER_BARRIER();
 	}
 
 	UT_RESUME_PRIORITY_CPU();
-
-	return(j);
 }
 
 /*************************************************************//**
@@ -323,7 +319,7 @@ ut_print_buf(
 	fprintf(file, " len " ULINTPF "; hex ", len);
 
 	for (data = (const byte*) buf, i = 0; i < len; i++) {
-		fprintf(file, "%02lx", static_cast<ulong>(*data++));
+		fprintf(file, "%02x", *data++);
 	}
 
 	fputs("; asc ", file);
@@ -756,6 +752,8 @@ ut_strerr(
 		       "of stored column");
 	case DB_IO_NO_PUNCH_HOLE:
 		return ("File system does not support punch hole (trim) operation.");
+	case DB_PAGE_CORRUPTED:
+		return("Page read from tablespace is corrupted.");
 
 	/* do not add default: in order to produce a warning if new code
 	is added to the enum but not added here */

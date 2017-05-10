@@ -1324,7 +1324,8 @@ use_heap:
 		data_len = rec_offs_data_size(offsets);
 
 		fprintf(stderr, "InnoDB: Error: current_rec == insert_rec "
-			" extra_len %lu data_len %lu insert_buf %p rec %p\n",
+			" extra_len " ULINTPF
+			" data_len " ULINTPF " insert_buf %p rec %p\n",
 			extra_len, data_len, insert_buf, rec);
 		fprintf(stderr, "InnoDB; Physical record: \n");
 		rec_print(stderr, rec, index);
@@ -2059,14 +2060,10 @@ page_copy_rec_list_end_to_created_page(
 
 	/* Individual inserts are logged in a shorter form */
 
-	mtr_log_t	log_mode;
-
-	if (dict_table_is_temporary(index->table)
-	    || index->table->ibd_file_missing /* IMPORT TABLESPACE */) {
-		log_mode = mtr_get_log_mode(mtr);
-	} else {
-		log_mode = mtr_set_log_mode(mtr, MTR_LOG_SHORT_INSERTS);
-	}
+	const mtr_log_t	log_mode = dict_table_is_temporary(index->table)
+	    || !index->is_readable() /* IMPORT TABLESPACE */
+		? mtr_get_log_mode(mtr)
+		: mtr_set_log_mode(mtr, MTR_LOG_SHORT_INSERTS);
 
 	prev_rec = page_get_infimum_rec(new_page);
 	if (page_is_comp(new_page)) {

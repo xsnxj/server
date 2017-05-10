@@ -184,6 +184,7 @@ my @DEFAULT_SUITES= qw(
     innodb_zip-
     json-
     maria-
+    mariabackup-
     multi_source-
     optimizer_unfixed_bugs-
     parts-
@@ -2278,6 +2279,11 @@ sub environment_setup {
   $ENV{'MYSQL_PLUGIN'}=             $exe_mysql_plugin;
   $ENV{'MYSQL_EMBEDDED'}=           $exe_mysql_embedded;
 
+  my $client_config_exe=
+    native_path("$bindir/libmariadb/mariadb_config$opt_vs_config/mariadb_config");
+  my $tls_info= `$client_config_exe --tlsinfo`;
+  ($ENV{CLIENT_TLS_LIBRARY},$ENV{CLIENT_TLS_LIBRARY_VERSION})=
+    split(/ /, $tls_info, 2);
   my $exe_mysqld= find_mysqld($basedir);
   $ENV{'MYSQLD'}= $exe_mysqld;
   my $extra_opts= join (" ", @opt_extra_mysqld_opt);
@@ -2757,7 +2763,7 @@ sub mysql_server_start($) {
     # Already started
 
     # Write start of testcase to log file
-    mark_log($mysqld->value('#log-error'), $tinfo);
+    mark_log($mysqld->value('log-error'), $tinfo);
 
     return;
   }
@@ -2791,13 +2797,10 @@ sub mysql_server_start($) {
     if (! $opt_start_dirty)	# If dirty, keep possibly grown system db
     {
       # Copy datadir from installed system db
-      for my $path ( "$opt_vardir", "$opt_vardir/..") {
-        my $install_db= "$path/install.db";
-        copytree($install_db, $datadir)
-          if -d $install_db;
-      }
-      mtr_error("Failed to copy system db to '$datadir'")
-        unless -d $datadir;
+      my $path= ($opt_parallel == 1) ? "$opt_vardir" : "$opt_vardir/..";
+      my $install_db= "$path/install.db";
+      copytree($install_db, $datadir) if -d $install_db;
+      mtr_error("Failed to copy system db to '$datadir'") unless -d $datadir;
     }
   }
   else
@@ -2814,7 +2817,7 @@ sub mysql_server_start($) {
   mkpath($tmpdir) unless -d $tmpdir;
 
   # Write start of testcase to log file
-  mark_log($mysqld->value('#log-error'), $tinfo);
+  mark_log($mysqld->value('log-error'), $tinfo);
 
   # Run <tname>-master.sh
   if ($mysqld->option('#!run-master-sh') and
@@ -4259,7 +4262,7 @@ sub get_log_from_proc ($$) {
 
   foreach my $mysqld (all_servers()) {
     if ($mysqld->{proc} eq $proc) {
-      my @srv_lines= extract_server_log($mysqld->if_exist('#log-error'), $name);
+      my @srv_lines= extract_server_log($mysqld->if_exist('log-error'), $name);
       $srv_log= "\nServer log from this test:\n" .
 	"----------SERVER LOG START-----------\n". join ("", @srv_lines) .
 	"----------SERVER LOG END-------------\n";
@@ -4466,7 +4469,7 @@ sub start_check_warnings ($$) {
 
   my $name= "warnings-".$mysqld->name();
 
-  my $log_error= $mysqld->value('#log-error');
+  my $log_error= $mysqld->value('log-error');
   # To be communicated to the test
   $ENV{MTR_LOG_ERROR}= $log_error;
   extract_warning_lines($log_error, 0);
@@ -4624,7 +4627,7 @@ sub check_warnings_post_shutdown {
   foreach my $mysqld ( mysqlds())
   {
     my ($testlist, $match_lines)=
-        extract_warning_lines($mysqld->value('#log-error'), 1);
+        extract_warning_lines($mysqld->value('log-error'), 1);
     $testname_hash->{$_}= 1 for @$testlist;
     $report.= join('', @$match_lines);
   }
@@ -5073,7 +5076,7 @@ sub mysqld_start ($$) {
   # Remove the old pidfile if any
   unlink($mysqld->value('pid-file'));
 
-  my $output= $mysqld->value('#log-error');
+  my $output= $mysqld->value('log-error');
 
   if ( $opt_valgrind and $opt_debug )
   {
