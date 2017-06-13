@@ -19635,6 +19635,93 @@ static void test_mdev12579()
 }
 
 
+typedef struct {
+  char sig[12];
+  char ver_cmd;
+  char fam;
+  short len;
+  union {
+    struct {  /* for TCP/UDP over IPv4, len = 12 */
+      int src_addr;
+      int dst_addr;
+      short src_port;
+      short dst_port;
+    } ip4;
+    struct {  /* for TCP/UDP over IPv6, len = 36 */
+      char  src_addr[16];
+      char  dst_addr[16];
+      short src_port;
+      short dst_port;
+    } ip6;
+    struct {  /* for AF_UNIX sockets, len = 216 */
+      char src_addr[108];
+      char dst_addr[108];
+    } unx;
+  } addr;
+} v2_proxy_header;
+
+static void test_proxy_header()
+{
+  MYSQL *m;
+  int rc;
+  MYSQL_RES *result;
+
+
+  rc = mysql_query(mysql, "CREATE USER 'u'@'192.168.0.1' IDENTIFIED BY 'password'");
+  myquery(rc);
+
+  const char *tcp4_text_proxy = "PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\r\n";
+  if (!(m = mysql_client_init(NULL)))
+  {
+    fprintf(stdout, "\n mysql_client_init() failed");
+    exit(1);
+  }
+
+
+  v2_proxy_header v2_header = { 0 };
+  memcpy(v2_header.sig, "\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A", 12);
+  v2_header.ver_cmd = (0x2 << 4) | 0x1; /* Version (0x2) , Command = PROXY (0x1) */
+  v2_header.fam = (0x1 << 4) | 0x1; /* AF_INET(0x10) , STREAM (0x01) */
+  v2_header.len = htons(12);
+  char *src_addr = (char *)&(v2_header.addr.ip4.src_addr);
+  src_addr[0] = 192;
+  src_addr[1] = 168;
+  src_addr[2] = 0;
+  src_addr[3] = 1;
+  char *dst_addr = (char *)&(v2_header.addr.ip4.dst_addr);
+  dst_addr[0] = 192;
+  dst_addr[1] = 168;
+  dst_addr[2] = 0;
+  dst_addr[3] = 1;
+  v2_header.addr.ip4.src_port = htons(56324);
+  v2_header.addr.ip4.dst_port = htons(443);
+
+
+  //mysql_optionsv(m, MARIADB_OPT_PROXY_HEADER, tcp4_text_proxy, strlen(tcp4_text_proxy));
+
+  mysql_optionsv(m, MARIADB_OPT_PROXY_HEADER, &v2_header, 28);
+  if (!mysql_real_connect(m, opt_host, "u", "password", NULL, opt_port,
+    opt_unix_socket, 0))
+  {
+    fprintf(stdout, "\n mysql_client_init() failed");
+    exit(1);
+  }
+
+  rc = mysql_query(m, "select host from information_schema.processlist WHERE ID = connection_id()");
+  myquery(rc);
+  /* get the result */
+  result = mysql_store_result(m);
+  mytest(result);
+  MYSQL_ROW row;
+  row = mysql_fetch_row(result);
+  DIE_UNLESS(strcmp(row[0], "192.168.0.1:56324") == 0);
+
+  mysql_close(m);
+
+  rc = mysql_query(mysql, "DROP USER 'u'@'192.168.0.1'");
+  myquery(rc);
+}
+
 static struct my_tests_st my_tests[]= {
   { "disable_query_logs", disable_query_logs },
   { "test_view_sp_list_fields", test_view_sp_list_fields },
@@ -19914,6 +20001,7 @@ static struct my_tests_st my_tests[]= {
   { "test_big_packet", test_big_packet },
   { "test_prepare_analyze", test_prepare_analyze },
   { "test_mdev12579", test_mdev12579 },
+  { "test_proxy_header", test_proxy_header},
   { 0, 0 }
 };
 
