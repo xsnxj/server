@@ -6088,7 +6088,7 @@ innobase_build_index_translation(
 		/* Fetch index pointers into index_mapping according to mysql
 		index sequence */
 		index_mapping[count] = dict_table_get_index_on_name(
-			ib_table, table->key_info[count].name);
+			ib_table, table->key_info[count].name.str);
 
 		if (index_mapping[count] == 0) {
 			sql_print_error("Cannot find index %s in InnoDB"
@@ -9812,9 +9812,9 @@ ha_innobase::innobase_get_index(
 		index = innobase_index_lookup(m_share, keynr);
 
 		if (index != NULL) {
-			if (!key || ut_strcmp(index->name, key->name) != 0) {
+			if (!key || ut_strcmp(index->name, key->name.str) != 0) {
 				ib::error() << " Index for key no " << keynr
-					    << " mysql name " << (key ? key->name : "NULL")
+					    << " mysql name " << (key ? key->name.str : "NULL")
 					    << " InnoDB name " << index->name()
 					    << " for table " << m_prebuilt->table->name.m_name;
 
@@ -9824,7 +9824,7 @@ ha_innobase::innobase_get_index(
 
 					if (index) {
 						ib::info() << " Index for key no " << keynr
-							   << " mysql name " << (key ? key->name : "NULL")
+							   << " mysql name " << (key ? key->name.str : "NULL")
 							   << " InnoDB name " << index->name()
 							   << " for table " << m_prebuilt->table->name.m_name;
 					}
@@ -9832,7 +9832,7 @@ ha_innobase::innobase_get_index(
 
 			}
 
-			ut_a(ut_strcmp(index->name, key->name) == 0);
+			ut_a(ut_strcmp(index->name, key->name.str) == 0);
 		} else {
 			/* Can't find index with keynr in the translation
 			table. Only print message if the index translation
@@ -9842,14 +9842,14 @@ ha_innobase::innobase_get_index(
 						  " index %s key no %u for"
 						  " table %s through its"
 						  " index translation table",
-						  key ? key->name : "NULL",
+						  key ? key->name.str : "NULL",
 						  keynr,
 						  m_prebuilt->table->name
 						  .m_name);
 			}
 
 			index = dict_table_get_index_on_name(
-				m_prebuilt->table, key->name);
+				m_prebuilt->table, key->name.str);
 		}
 	} else {
 		key = 0;
@@ -9860,7 +9860,7 @@ ha_innobase::innobase_get_index(
 		sql_print_error(
 			"InnoDB could not find key no %u with name %s"
 			" from dict cache for table %s",
-			keynr, key ? key->name : "NULL",
+			keynr, key ? key->name.str : "NULL",
 			m_prebuilt->table->name.m_name);
 	}
 
@@ -11031,7 +11031,7 @@ ha_innobase::wsrep_append_keys(
 			if (!tab) {
 				WSREP_WARN("MariaDB-InnoDB key mismatch %s %s",
 					   table->s->table_name.str,
-					   key_info->name);
+					   key_info->name.str);
 			}
 			/* !hasPK == table with no PK, must append all non-unique keys */
 			if (!hasPK || key_info->flags & HA_NOSAME ||
@@ -11695,7 +11695,7 @@ create_index(
 	key = form->key_info + key_num;
 
 	/* Assert that "GEN_CLUST_INDEX" cannot be used as non-primary index */
-	ut_a(innobase_strcasecmp(key->name, innobase_index_reserve_name) != 0);
+	ut_a(innobase_strcasecmp(key->name.str, innobase_index_reserve_name) != 0);
 
 	ind_type = 0;
 	if (key->flags & HA_SPATIAL) {
@@ -11706,7 +11706,7 @@ create_index(
 
 	if (ind_type != 0)
 	{
-		index = dict_mem_index_create(table_name, key->name, 0,
+		index = dict_mem_index_create(table_name, key->name.str, 0,
 					      ind_type,
 					      key->user_defined_key_parts);
 
@@ -11748,7 +11748,7 @@ create_index(
 	/* We pass 0 as the space id, and determine at a lower level the space
 	id where to store the table */
 
-	index = dict_mem_index_create(table_name, key->name, 0,
+	index = dict_mem_index_create(table_name, key->name.str, 0,
 				      ind_type, key->user_defined_key_parts);
 
 	for (ulint i = 0; i < key->user_defined_key_parts; i++) {
@@ -12383,16 +12383,16 @@ create_table_info_t::innobase_table_flags()
 			}
 		}
 
-		if (innobase_strcasecmp(key->name, FTS_DOC_ID_INDEX_NAME)) {
+		if (innobase_strcasecmp(key->name.str, FTS_DOC_ID_INDEX_NAME)) {
 			continue;
 		}
 
 		/* Do a pre-check on FTS DOC ID index */
 		if (!(key->flags & HA_NOSAME)
-		    || strcmp(key->name, FTS_DOC_ID_INDEX_NAME)
+		    || strcmp(key->name.str, FTS_DOC_ID_INDEX_NAME)
 		    || strcmp(key->key_part[0].field->field_name.str,
 			      FTS_DOC_ID_COL_NAME)) {
-			fts_doc_id_index_bad = key->name;
+			fts_doc_id_index_bad = key->name.str;
 		}
 
 		if (fts_doc_id_index_bad && (m_flags2 & DICT_TF2_FTS)) {
@@ -12678,7 +12678,7 @@ innobase_parse_hint_from_comment(
 				KEY*	key_info = &table_share->key_info[i];
 
 				if (innobase_strcasecmp(
-					index->name, key_info->name) == 0) {
+					index->name, key_info->name.str) == 0) {
 
 					dict_index_set_merge_threshold(
 						index,
@@ -12720,7 +12720,7 @@ innobase_parse_hint_from_comment(
 			KEY*	key_info = &table_share->key_info[i];
 
 			if (innobase_strcasecmp(
-				index->name, key_info->name) == 0) {
+				index->name, key_info->name.str) == 0) {
 
 				/* x-lock index is needed to exclude concurrent
 				pessimistic tree operations */
@@ -14231,7 +14231,7 @@ innobase_get_mysql_key_number_for_index(
 	InnoDB dict_index_t list */
 	for (i = 0; i < table->s->keys; i++) {
 		ind = dict_table_get_index_on_name(
-			ib_table, table->key_info[i].name);
+			ib_table, table->key_info[i].name.str);
 
 		if (index == ind) {
 			return(i);
@@ -19098,7 +19098,7 @@ innobase_index_name_is_reserved(
 	for (key_num = 0; key_num < num_of_keys; key_num++) {
 		key = &key_info[key_num];
 
-		if (innobase_strcasecmp(key->name,
+		if (innobase_strcasecmp(key->name.str,
 					innobase_index_reserve_name) == 0) {
 			/* Push warning to mysql */
 			push_warning_printf(thd,
