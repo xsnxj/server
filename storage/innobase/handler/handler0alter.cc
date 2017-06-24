@@ -1055,7 +1055,9 @@ ha_innobase::check_if_supported_inplace_alter(
 		}
 
 		if (!(*af)->default_value
-		    || (*af)->default_value->flags == 0) {
+		    || (*af)->default_value->flags == 0
+		    /* Maybe add columns with current_timestamp default is allowed. See fill_alter_inplace_info()*/
+		    || ha_alter_info->handler_flags & Alter_inplace_info::ADD_INSTANT_COLUMN) {
 			/* The NOT NULL column is not
 			carrying a non-constant DEFAULT. */
 			goto next_column;
@@ -4299,7 +4301,7 @@ innobase_add_one_instant(
 	pars_info_add_ull_literal(info, "id", table->id);
 	pars_info_add_int4_literal(info, "pos", pos_in_innodb);
 	//pars_info_add_str_literal(info, "default_value", def_val_len);
-	pars_info_add_literal(info, "default_value", def_val, def_val_len, DATA_FIXBINARY, DATA_BINARY_TYPE);
+	pars_info_add_literal(info, "default_value", def_val, def_val_len, DATA_BLOB, DATA_BINARY_TYPE);
 
 	error = que_eval_sql(
 		info,
