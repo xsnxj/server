@@ -1942,7 +1942,7 @@ static void set_thread_id_v1(PSI_thread *thread, ulonglong processlist_id)
   PFS_thread *pfs= reinterpret_cast<PFS_thread*> (thread);
   if (unlikely(pfs == NULL))
     return;
-  pfs->m_processlist_id= processlist_id;
+  pfs->m_processlist_id= (ulong)processlist_id;
 }
 
 /**

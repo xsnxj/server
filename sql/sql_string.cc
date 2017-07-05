@@ -533,16 +533,23 @@ bool String::append(const char *s,uint32 arg_length, CHARSET_INFO *cs)
   return FALSE;
 }
 
-bool String::append(IO_CACHE* file, uint32 arg_length)
+bool String::append(IO_CACHE* file, my_off_t arg_length)
 {
-  if (realloc_with_extra_if_needed(str_length+arg_length))
+  uint32 len;
+  DBUG_ASSERT(arg_length <= UINT_MAX);
+  if (arg_length > UINT_MAX)
+  {
     return TRUE;
-  if (my_b_read(file, (uchar*) Ptr + str_length, arg_length))
+  }
+  len = (uint32)arg_length;
+  if (realloc_with_extra_if_needed(str_length+len))
+    return TRUE;
+  if (my_b_read(file, (uchar*) Ptr + str_length, len))
   {
     shrink(str_length);
     return TRUE;
   }
-  str_length+=arg_length;
+  str_length+=len;
   return FALSE;
 }
 

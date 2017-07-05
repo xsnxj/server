@@ -2298,7 +2298,7 @@ ha_myisam::check_if_supported_inplace_alter(TABLE *new_table,
   const uint readd_pk= Alter_inplace_info::ADD_PK_INDEX |
                        Alter_inplace_info::DROP_PK_INDEX;
 
-  const uint op= alter_info->handler_flags;
+  const ulonglong op= alter_info->handler_flags;
 
   if (alter_info->handler_flags & Alter_inplace_info::ALTER_COLUMN_VCOL)
     DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
