@@ -2278,12 +2278,14 @@ sub environment_setup {
   $ENV{'EXE_MYSQL'}=                $exe_mysql;
   $ENV{'MYSQL_PLUGIN'}=             $exe_mysql_plugin;
   $ENV{'MYSQL_EMBEDDED'}=           $exe_mysql_embedded;
-
-  my $client_config_exe=
-    native_path("$bindir/libmariadb/mariadb_config$opt_vs_config/mariadb_config");
-  my $tls_info= `$client_config_exe --tlsinfo`;
-  ($ENV{CLIENT_TLS_LIBRARY},$ENV{CLIENT_TLS_LIBRARY_VERSION})=
-    split(/ /, $tls_info, 2);
+  if (!IS_WINDOWS)
+  {
+    my $client_config_exe=
+      native_path("$bindir/libmariadb/mariadb_config$opt_vs_config/mariadb_config");
+    my $tls_info= `$client_config_exe --tlsinfo`;
+    ($ENV{CLIENT_TLS_LIBRARY},$ENV{CLIENT_TLS_LIBRARY_VERSION})=
+      split(/ /, $tls_info, 2);
+  }
   my $exe_mysqld= find_mysqld($basedir);
   $ENV{'MYSQLD'}= $exe_mysqld;
   my $extra_opts= join (" ", @opt_extra_mysqld_opt);
