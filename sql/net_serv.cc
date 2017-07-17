@@ -1082,8 +1082,11 @@ packets_out_of_order:
     /* Check if proxy header was sent. */
     proxy_peer_info peer_info;
     THD *thd = (THD *)net->thd;
-    bool is_proxy_header_allowed = thd && (thd->get_command() == COM_CONNECT);
-    if (is_proxy_header_allowed && !parse_proxy_protocol_header(net, &peer_info))
+
+    if (thd && thd->net.vio
+        && (thd->get_command() == COM_CONNECT)
+        && is_proxy_protocol_allowed((sockaddr *)&(thd->net.vio->remote), thd->net.vio->addrLen)
+        && !parse_proxy_protocol_header(net, &peer_info))
     {
       if (!peer_info.is_local_connection)
       {

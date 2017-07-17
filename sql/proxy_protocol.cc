@@ -22,6 +22,7 @@
 #include <my_net.h>
 #include <violite.h>
 #include <proxy_protocol.h>
+#include <log.h>
 
 static int parse_proxy_protocol_v1_header(char *hdr, size_t len, proxy_peer_info *peer_info)
 {
@@ -189,6 +190,170 @@ int parse_proxy_protocol_header(NET *net, proxy_peer_info *peer_info)
     if (parse_proxy_protocol_v2_header(hdr, hdr_len, peer_info))
       return -1;
   }
-  if (peer_info->is_local_connection)
-    return 0;
+  return 0;
 }
+
+
+/**
+ CIDR address matching etc (for the proxy_protocol_networks parameter)
+*/
+
+/**
+  Subnetwork address in CIDR format, e.g
+  192.168.1.0/24 or 2001:db8::/32
+*/
+struct subnet
+{
+  char addr[16]; /* Binary representation of the address, big endian*/
+  unsigned short family; /* Address family, AF_INET or AF_INET6 */
+  unsigned short bits; /* subnetwork size */
+};
+
+static  subnet* proxy_protocol_subnets;
+size_t  proxy_protocol_subnet_count;
+
+#define MAX_MASK_BITS(family) (family == AF_INET ? 32 : 128)
+
+/**
+  Convert string representation of a subnet to subnet struct.
+*/
+static int parse_single_subnet(char *addr_str, struct subnet *subnet)
+{
+  subnet->family = strchr(addr_str, ':') ? AF_INET6 : AF_INET;
+
+  char *pmask = strchr(addr_str, '/');
+  if (!pmask)
+  {
+    subnet->bits = MAX_MASK_BITS(subnet->family);
+  }
+  else
+  {
+    *pmask = 0;
+    pmask++;
+    int b= 0;
+    do
+    {
+      if (*pmask < '0' || *pmask > '9')
+        return -1;
+      b = 10 * b + *pmask - '0';
+      if (b > MAX_MASK_BITS(subnet->family))
+        return -1;
+      pmask++;
+    } while (*pmask);
+    subnet->bits = (unsigned short)b;
+  }
+  if (!inet_pton(subnet->family, addr_str, subnet->addr))
+  {
+    return -1;
+  }
+  return 0;
+}
+
+/**
+  Parse comma separated string subnet list into subnets array
+*/
+int set_proxy_protocol_networks(const char *subnets_str)
+{
+  if (!subnets_str || !*subnets_str)
+    return 0;
+
+  size_t max_subnets = MY_MIN(2,strlen(subnets_str)/2); /* upper bound for number of subnets in list, reached only if subnet_str is "".*/
+  proxy_protocol_subnets = (subnet *)my_malloc(max_subnets * sizeof(subnet), MYF(MY_ZEROFILL)); 
+  proxy_protocol_subnet_count = 0;
+
+  subnet* subnet = proxy_protocol_subnets + proxy_protocol_subnet_count;
+  /* Check for special case '*'. */
+  if (strcmp(subnets_str, "*") == 0)
+  {
+
+    subnet[0].family = AF_INET;
+    subnet[1].family = AF_INET6;
+    return 0;
+  }
+
+  char token[256];
+  const char *p= subnets_str;
+  for(proxy_protocol_subnet_count = 0;; proxy_protocol_subnet_count++)
+  {
+    while(*p && (*p ==',' || *p == ' '))
+      p++;
+    if (!*p)
+      break;
+
+    size_t cnt= 0;
+    while(*p && *p != ',' && *p != ' ' && cnt < sizeof(token)-1)
+      token[cnt++]= *p++;
+
+    token[cnt++]=0;
+    if (cnt ==  sizeof(token))
+      return -1;
+
+    if (parse_single_subnet(token, &proxy_protocol_subnets[proxy_protocol_subnet_count]))
+      return -1;
+  }
+  return 0;
+}
+
+/**
+   Compare memory areas, in memcmp().similar fashion.
+   The difference to memcmp() is that size parameter is the
+   bit count, not byte count.
+*/
+static int compare_bits(const void *s1, const void *s2, int bit_count)
+{
+  int result = 0;
+  int byte_count = bit_count / 8;
+  if (byte_count && (result = memcmp(s1, s2, byte_count)))
+    return result;
+  int rem = byte_count % 8;
+  if (rem)
+  {
+    // compare remaining bits (
+    unsigned char s1_bits = (((char *)s1)[byte_count]) >> (8 - rem);
+    unsigned char s2_bits = (((char *)s2)[byte_count]) >> (8 - rem);
+    if (s1_bits > s2_bits)
+      return 1;
+    if (s1_bits < s2_bits)
+      return -1;
+  }
+  return 0;
+}
+
+/**
+  Check whether networks address matches network.
+*/
+bool addr_matches_subnet(const sockaddr *sock_addr, const subnet *subnet)
+{
+  if (sock_addr->sa_family != subnet->family)
+    return false;
+
+  void *addr = (subnet->family == AF_INET) ?
+    (void *)&((struct sockaddr_in *)sock_addr)->sin_addr :
+    (void *)&((struct sockaddr_in6 *)sock_addr)->sin6_addr;
+
+  return (compare_bits(subnet->addr, addr, subnet->bits) == 0);
+}
+
+
+bool is_proxy_protocol_allowed(const sockaddr *addr, int len)
+{
+  sockaddr_storage addr_storage;
+  struct sockaddr *normalized_addr = (struct sockaddr *)&addr_storage;
+  int dst_len;
+  vio_get_normalized_ip(addr, len,normalized_addr, &dst_len);
+
+  for (size_t i= 0; i < proxy_protocol_subnet_count; i++)
+    if (addr_matches_subnet(normalized_addr, &proxy_protocol_subnets[i]))
+      return true;
+
+  return false;
+}
+
+void cleanup_proxy_protocol_networks()
+{
+  my_free(proxy_protocol_subnets);
+  proxy_protocol_subnets= 0;
+  proxy_protocol_subnet_count = 0;
+}
+
+
