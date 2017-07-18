@@ -19662,6 +19662,7 @@ typedef struct {
 
 static void test_proxy_header()
 {
+#ifndef EMBEDDED_LIBRARY
   MYSQL *m;
   int rc;
   MYSQL_RES *result;
@@ -19720,6 +19721,7 @@ static void test_proxy_header()
 
   rc = mysql_query(mysql, "DROP USER 'u'@'192.168.0.1'");
   myquery(rc);
+#endif
 }
 
 static struct my_tests_st my_tests[]= {

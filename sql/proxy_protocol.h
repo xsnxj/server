@@ -3,7 +3,6 @@
 struct proxy_peer_info
 {
   struct sockaddr_storage peer_addr;
-  char ip_string[256];
   int port;
   bool is_local_connection;
 };

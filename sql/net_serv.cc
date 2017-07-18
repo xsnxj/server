@@ -47,6 +47,8 @@
 #include "probes_mysql.h"
 #include "proxy_protocol.h"
 #include <sql_class.h>
+#include <sql_connect.h>
+
 /*
   to reduce the number of ifdef's in the code
 */
@@ -821,7 +823,50 @@ static my_bool my_net_skip_rest(NET *net, uint32 remain, thr_alarm_t *alarmed,
 }
 #endif /* NO_ALARM */
 
-extern int thd_set_peer_addr(THD *thd, sockaddr_storage *addr, const char *ip, uint port);
+
+/**
+  Try to parse and process proxy protocol header.
+
+  This function is called in case MySQL packet header cannot be parsed.
+  It checks if proxy header was sent, and that it was send from allowed remote
+  host, as defined by proxy-protocol-networks parameter.
+
+  If proxy header is parsed, then THD and ACL structures and changed to indicate
+  the new peer address and port.
+
+  Note, that proxy header can only be sent either when the connection is established,
+  or as the client reply packet to 
+*/
+static int handle_proxy_header(NET *net)
+{
+  proxy_peer_info peer_info;
+  THD *thd= (THD *)net->thd;
+
+  if (!thd  || !thd->net.vio)
+    return 1;
+
+  if (thd->get_command() != COM_CONNECT)
+    /* Proxy header is only allowed during first connection packet */
+    return 1;
+
+  if (!is_proxy_protocol_allowed((sockaddr *)&(thd->net.vio->remote), thd->net.vio->addrLen))
+     /* proxy-protocol-networks variable needs to be set to allow this remote address */
+    return 1; 
+
+  if (parse_proxy_protocol_header(net, &peer_info))
+     /* Failed to parse proxy header*/
+     return 1;
+
+  if (peer_info.is_local_connection)
+    /* proxy header indicates LOCAL connection, no action necessary */
+    return 0;
+#ifdef EMBEDDED_LIBRARY
+   return 0;
+#else
+  /* Change peer address in THD and ACL structures.*/
+  return thd_set_peer_addr(thd, &(peer_info.peer_addr), NULL, peer_info.port);
+#endif
+}
 
 /**
   Reads one packet to net->buff + net->where_b.
@@ -1079,25 +1124,8 @@ end:
 
 packets_out_of_order:
   {
-    /* Check if proxy header was sent. */
-    proxy_peer_info peer_info;
-    THD *thd = (THD *)net->thd;
-
-    if (thd && thd->net.vio
-        && (thd->get_command() == COM_CONNECT)
-        && is_proxy_protocol_allowed((sockaddr *)&(thd->net.vio->remote), thd->net.vio->addrLen)
-        && !parse_proxy_protocol_header(net, &peer_info))
-    {
-      if (!peer_info.is_local_connection)
-      {
-        if (thd_set_peer_addr(thd, &(peer_info.peer_addr), NULL, peer_info.port))
-          return packet_error;
-      }
-      /* After parsing proxy header, and set peer address and port in THD,
-       read the actual first packet from network.
-      */
+    if (!handle_proxy_header(net))
       goto retry;
-    }
 
     DBUG_PRINT("error",
                ("Packets out of order (Found: %d, expected %u)",
@@ -1189,6 +1217,7 @@ my_net_read_packet_reallen(NET *net, my_bool read_from_server, ulong* reallen)
 	len+= total_length;
       net->where_b = save_pos;
     }
+
     net->read_pos = net->buff + net->where_b;
     if (len != packet_error)
     {
