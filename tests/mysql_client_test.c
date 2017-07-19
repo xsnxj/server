@@ -19661,7 +19661,7 @@ typedef struct {
 } v2_proxy_header;
 
 #ifndef EMBEDDED_LIBRARY
-static void test_proxy_header_helper(const char *ipaddr, int port)
+static void test_proxy_header_tcp(const char *ipaddr, int port)
 {
  
   int rc;
@@ -19735,15 +19735,72 @@ static void test_proxy_header_helper(const char *ipaddr, int port)
   myquery(rc);
 }
 
+
+/* Test proxy protocol with AF_UNIX (localhost) */
+static void test_proxy_header_localhost()
+{
+  v2_proxy_header v2_header = { 0 };
+
+  memcpy(v2_header.sig, "\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A", 12);
+  v2_header.ver_cmd = (0x2 << 4) | 0x1; /* Version (0x2) , Command = PROXY (0x1) */
+  v2_header.fam= 0x31;
+  v2_header.len= htons(216);
+  strcpy(v2_header.addr.unx.src_addr,"/tmp/mysql.sock");
+  strcpy(v2_header.addr.unx.dst_addr,"/tmp/mysql.sock");
+  void *header_data = &v2_header;
+  size_t header_length= 216 + 16;
+
+  int rc = mysql_query(mysql, "CREATE USER 'u'@'localhost' IDENTIFIED BY 'password'");
+  myquery(rc);
+  MYSQL *m = mysql_client_init(NULL);
+  DIE_UNLESS(m != NULL);
+  mysql_optionsv(m, MARIADB_OPT_PROXY_HEADER, header_data, header_length);
+  DIE_UNLESS(mysql_real_connect(m, opt_host, "u", "password", NULL, opt_port, opt_unix_socket, 0) == m);
+  DIE_UNLESS(mysql_query(m, "select host from information_schema.processlist WHERE ID = connection_id()") == 0);
+  /* get the result */
+  MYSQL_RES *result= mysql_store_result(m);
+  mytest(result);
+  MYSQL_ROW row;
+  row = mysql_fetch_row(result);
+  DIE_UNLESS(strcmp(row[0], "localhost") == 0);
+  mysql_close(m);
+  rc = mysql_query(mysql,  "DROP USER 'u'@'localhost'");
+  myquery(rc);
+}
+
+/* Proxy header ignoring */
+static void test_proxy_header_ignore()
+{
+  MYSQL *m = mysql_client_init(NULL);
+  DIE_UNLESS(m != NULL);
+  mysql_optionsv(m, MARIADB_OPT_PROXY_HEADER, "PROXY UNKNOWN\r\n",15);
+  DIE_UNLESS(mysql_real_connect(m, opt_host, "root", "", NULL, opt_port, opt_unix_socket, 0) == m);
+  mysql_close(m);
+
+  v2_proxy_header v2_header = { 0 };
+  memcpy(v2_header.sig, "\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A", 12);
+  v2_header.ver_cmd = (0x2 << 4) | 0x0; /* Version (0x2) , Command = LOCAL (0x0) */
+  v2_header.fam= 0x0; /* AF_UNSPEC*/
+  v2_header.len= htons(0);
+  m = mysql_client_init(NULL);
+  mysql_optionsv(m, MARIADB_OPT_PROXY_HEADER, &v2_header,16);
+  DIE_UNLESS(mysql_real_connect(m, opt_host, "root", "", NULL, opt_port, opt_unix_socket, 0) == m);
+  mysql_close(m);
+
+}
+
+
 static void test_proxy_header()
 {
-  test_proxy_header_helper("192.168.0.1",3333);
-  test_proxy_header_helper("2001:db8:85a3::8a2e:370:7334",2222);
+  test_proxy_header_tcp("192.168.0.1",3333);
+  test_proxy_header_tcp("2001:db8:85a3::8a2e:370:7334",2222);
+  test_proxy_header_localhost();
+  test_proxy_header_ignore();
 }
+
 #endif
 
 static struct my_tests_st my_tests[]= {
-
   { "disable_query_logs", disable_query_logs },
   { "test_view_sp_list_fields", test_view_sp_list_fields },
   { "client_query", client_query },

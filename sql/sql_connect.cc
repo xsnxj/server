@@ -845,7 +845,15 @@ int thd_set_peer_addr(THD *thd, sockaddr_storage *addr, const char *ip,uint port
   if (!ip)
   {
     void *addr_data;
-    if (addr->ss_family == AF_INET)
+    if (addr->ss_family == AF_UNIX)
+    {
+        /* local connection */
+        my_free((void *)thd->main_security_ctx.ip);
+        thd->main_security_ctx.host_or_ip= thd->main_security_ctx.host = my_localhost;
+        thd->main_security_ctx.ip= 0;
+        return 0;
+    }
+    else if (addr->ss_family == AF_INET)
       addr_data= &((struct sockaddr_in *)addr)->sin_addr;
     else
       addr_data= &((struct sockaddr_in6 *)addr)->sin6_addr;

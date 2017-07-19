@@ -24,15 +24,14 @@
 #include <proxy_protocol.h>
 #include <log.h>
 
-static int parse_proxy_protocol_v1_header(char *hdr, size_t len, proxy_peer_info *peer_info)
+static int parse_proxy_protocol_v1_header(uchar *hdr, size_t len, proxy_peer_info *peer_info)
 {
   char *ctx= NULL;
   char *token;
   int   address_family;
 
-
   // Parse PROXY
-  token= strtok_r(hdr, " ", &ctx);
+  token= strtok_r((char *)hdr, " ", &ctx);
   if (!token)
     return -1;
   if (strcmp(token, "PROXY"))
@@ -47,8 +46,12 @@ static int parse_proxy_protocol_v1_header(char *hdr, size_t len, proxy_peer_info
     address_family= AF_INET;
   else if (strcmp(token, "TCP6") == 0)
     address_family= AF_INET6;
-  else if (strcmp(token, "UNKNOWN") == 0)
+  else if (strncmp(token, "UNKNOWN",7) == 0)
+  {
     address_family= AF_UNSPEC;
+    peer_info->is_local_command= true;
+    return 0;
+  }
   else
     return -1;
 
@@ -88,9 +91,8 @@ static int parse_proxy_protocol_v1_header(char *hdr, size_t len, proxy_peer_info
   return 0;
 }
 
-static int parse_proxy_protocol_v2_header(char *hdr, size_t len,proxy_peer_info *peer_info)
+static int parse_proxy_protocol_v2_header(uchar *hdr, size_t len,proxy_peer_info *peer_info)
 {
-  peer_info->is_local_connection= false;
   /* V2 Signature */
   if (memcmp(hdr, "\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A", 12))
     return -1;
@@ -103,12 +105,12 @@ static int parse_proxy_protocol_v2_header(char *hdr, size_t len,proxy_peer_info 
   uint cmd= (hdr[12] & 0xF);
 
   /* Address family */
-  uint8 fam= hdr[13];
+  uchar fam= hdr[13];
 
   if (cmd == 0)
   {
     /* LOCAL command*/
-    peer_info->is_local_connection= true;
+    peer_info->is_local_command= true;
     return 0;
   }
 
@@ -125,15 +127,18 @@ static int parse_proxy_protocol_v2_header(char *hdr, size_t len,proxy_peer_info 
   case 0x11:  /* TCPv4 */
     sin->sin_family= AF_INET;
     memcpy(&(sin->sin_addr.s_addr), hdr + 16, 4);
-    peer_info->port= ((uchar)hdr[24] << 8) + (uchar)hdr[25];
+    peer_info->port= (hdr[24] << 8) + hdr[25];
     break;
   case 0x21:  /* TCPv6 */
     sin6->sin6_family= AF_INET6;
     memcpy(&(sin6->sin6_addr), hdr + 16, 16);
-    peer_info->port= ((uchar)hdr[48] << 8) + (uchar)hdr[49];
+    peer_info->port= (hdr[48] << 8) + hdr[49];
+    break;
+  case 0x31: /* AF_UNIX, strea,*/
+    peer_info->peer_addr.ss_family= AF_UNIX;
     break;
   default:
-    peer_info->is_local_connection= true;
+    return -1;
   }
   return 0;
 }
@@ -141,7 +146,7 @@ static int parse_proxy_protocol_v2_header(char *hdr, size_t len,proxy_peer_info 
 
 int parse_proxy_protocol_header(NET *net, proxy_peer_info *peer_info)
 {
-  char hdr[108];
+  uchar hdr[256];
   size_t hdr_len= 0;
 
   DBUG_ASSERT(!net->compress);
@@ -162,7 +167,7 @@ int parse_proxy_protocol_header(NET *net, proxy_peer_info *peer_info)
   {
     while(hdr_len < sizeof(hdr))
     {
-      long len= (long)vio_read(vio, (uchar *)hdr + hdr_len, 1);
+      long len= (long)vio_read(vio, hdr + hdr_len, 1);
       if (len < 0)
         return -1;
       hdr_len++;
@@ -177,14 +182,14 @@ int parse_proxy_protocol_header(NET *net, proxy_peer_info *peer_info)
   else // if (is_v2_header)
   {
     /* read off 16 bytes of the header*/
-    long len= vio_read(vio, (uchar *)hdr + 4, 12);
+    long len= vio_read(vio, hdr + 4, 12);
     if (len < 0)
       return -1;
     // 2 last bytes are the length in network byte order of the part following header
     ushort trail_len= (hdr[14] >> 8) + hdr[15];
     if (trail_len > sizeof(hdr) - 16)
       return -1;
-    len= vio_read(vio, (uchar *)hdr + 16, trail_len);
+    len= vio_read(vio,  hdr + 16, trail_len);
     hdr_len= 16 + trail_len;
     if (parse_proxy_protocol_v2_header(hdr, hdr_len, peer_info))
       return -1;

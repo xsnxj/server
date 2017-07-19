@@ -857,7 +857,7 @@ static int handle_proxy_header(NET *net)
      /* Failed to parse proxy header*/
      return 1;
 
-  if (peer_info.is_local_connection)
+  if (peer_info.is_local_command)
     /* proxy header indicates LOCAL connection, no action necessary */
     return 0;
 #ifdef EMBEDDED_LIBRARY

@@ -4,7 +4,7 @@ struct proxy_peer_info
 {
   struct sockaddr_storage peer_addr;
   int port;
-  bool is_local_connection;
+  bool is_local_command;
 };
 
 extern int parse_proxy_protocol_header(NET *net, proxy_peer_info *peer_info);
