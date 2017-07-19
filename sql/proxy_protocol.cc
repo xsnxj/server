@@ -30,7 +30,7 @@ static int parse_proxy_protocol_v1_header(char *hdr, size_t len, proxy_peer_info
   char *token;
   int   address_family;
 
-  peer_info->is_local_connection= false;
+
   // Parse PROXY
   token= strtok_r(hdr, " ", &ctx);
   if (!token)
@@ -156,7 +156,8 @@ int parse_proxy_protocol_header(NET *net, proxy_peer_info *peer_info)
   memcpy(hdr, preread_bytes, 4);
   hdr_len= 4;
   Vio *vio= net->vio;
-  peer_info->is_local_connection= false;
+  memset(peer_info, 0, sizeof (*peer_info));
+
   if (is_v1_header)
   {
     while(hdr_len < sizeof(hdr))

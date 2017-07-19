@@ -844,9 +844,14 @@ int thd_set_peer_addr(THD *thd, sockaddr_storage *addr, const char *ip,uint port
   char ip_string[128];
   if (!ip)
   {
-    if (vio_get_normalized_ip_string((struct sockaddr*)addr,
-      sizeof(sockaddr_storage), ip_string, sizeof(ip_string)))
+    void *addr_data;
+    if (addr->ss_family == AF_INET)
+      addr_data= &((struct sockaddr_in *)addr)->sin_addr;
+    else
+      addr_data= &((struct sockaddr_in6 *)addr)->sin6_addr;
+    if (!inet_ntop(addr->ss_family,addr_data, ip_string, sizeof(ip_string)))
     {
+      DBUG_ASSERT(0);
       return 1;
     }
     ip= ip_string;
