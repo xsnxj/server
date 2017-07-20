@@ -7799,7 +7799,19 @@ void Field_varstring::hash(ulong *nr, ulong *nr2)
 }
 
 
-/*
+/**
+  Compress field
+
+  @param[out]    to         destination buffer for compressed data
+  @param[in,out] to_length  in: size of to, out: compressed data length
+  @param[in]     from       data to compress
+  @param[in]     length     from length
+  @param[in]     cs         from character set
+
+  In worst case (no compression performed) storage requirement is increased by
+  1 byte to store header. If it exceeds field length, normal data truncation is
+  performed.
+
   Generic compressed header format (1 byte):
 
   Bits 1-4: method specific bits
@@ -7860,9 +7872,7 @@ int Field_longstr::compress_zlib(char *to, uint *to_length,
                                                             -MAX_WBITS;
     uint strategy= thd->variables.column_compression_zlib_strategy;
     /* Store only meaningful bytes of original data length. */
-    uchar original_pack_length= length < 256 ? 1 :
-                                length < 65536 ? 2 :
-                                length < 16777216 ? 3 : 4;
+    uchar original_pack_length= number_storage_requirement(length);
 
     *to= 0x80 + original_pack_length + (wbits < 0 ? 8 : 0);
     store_bigendian(length, (uchar*) to + 1, original_pack_length);
@@ -7881,12 +7891,13 @@ int Field_longstr::compress_zlib(char *to, uint *to_length,
         deflate(&stream, Z_FINISH) == Z_STREAM_END &&
         deflateEnd(&stream) == Z_OK)
     {
-      *to_length= stream.next_out - (Bytef*) to;
+      *to_length= (uint) (stream.next_out - (Bytef*) to);
       status_var_increment(thd->status_var.column_compressions);
       goto end;
     }
   }
 
+  /* Store uncompressed */
   to[0]= 0;
   memcpy(to + 1, from, length);
   *to_length= length + 1;
@@ -7906,7 +7917,7 @@ end:
 */
 
 String *Field_longstr::uncompress_zlib(String *val_buffer, String *val_ptr,
-                                       const uchar *from, size_t from_length)
+                                       const uchar *from, uint from_length)
 {
   z_stream stream;
   uchar method;
@@ -7923,6 +7934,7 @@ String *Field_longstr::uncompress_zlib(String *val_buffer, String *val_ptr,
   from++;
   from_length--;
 
+  /* Uncompressed data */
   if (!method)
   {
     val_ptr->set((const char*) from, from_length, field_charset);
@@ -7966,6 +7978,11 @@ String *Field_longstr::uncompress_zlib(String *val_buffer, String *val_ptr,
   my_error(ER_ZLIB_Z_DATA_ERROR, MYF(0));
 
 end:
+  /*
+    It would be better to return 0 in case of errors, but to take the
+    safer route, let's return a zero string and let the general
+    handler catch the error.
+  */
   val_ptr->set("", 0, field_charset);
   return val_ptr;
 }
@@ -7995,8 +8012,7 @@ double Field_varstring_compressed::val_real(void)
   THD *thd= get_thd();
   String buf;
   val_str(&buf, &buf);
-  return Converter_strntod_with_warn(thd, Warn_filter(thd),
-                                     Field_varstring::charset(),
+  return Converter_strntod_with_warn(thd, Warn_filter(thd), field_charset,
                                      buf.ptr(), buf.length()).result();
 }
 
@@ -8007,8 +8023,7 @@ longlong Field_varstring_compressed::val_int(void)
   THD *thd= get_thd();
   String buf;
   val_str(&buf, &buf);
-  return Converter_strntoll_with_warn(thd, Warn_filter(thd),
-                                      Field_varstring::charset(),
+  return Converter_strntoll_with_warn(thd, Warn_filter(thd), field_charset,
                                       buf.ptr(), buf.length()).result();
 }
 
@@ -8520,6 +8535,14 @@ uint Field_blob::max_packed_col_length(uint max_length)
 }
 
 
+/*
+  Blob fields are regarded equal if they have same character set,
+  same blob store length and if either both are compressed or both are
+  uncompressed.
+  The logic for compression is that we don't have to uncompress and compress
+  again an already compressed field just because compression method changes.
+*/
+
 uint Field_blob::is_equal(Create_field *new_field)
 {
   return ((new_field->sql_type == get_blob_type_from_length(max_data_length()))
@@ -8558,14 +8581,10 @@ String *Field_blob_compressed::val_str(String *val_buffer, String *val_ptr)
 double Field_blob_compressed::val_real(void)
 {
   ASSERT_COLUMN_MARKED_FOR_READ;
+  THD *thd= get_thd();
   String buf;
-  THD *thd;
-
   val_str(&buf, &buf);
-  if (!buf.length())
-    return 0.0;
-  thd= get_thd();
-  return Converter_strntod_with_warn(thd, Warn_filter(thd), charset(),
+  return Converter_strntod_with_warn(thd, Warn_filter(thd), field_charset,
                                      buf.ptr(), buf.length()).result();
 }
 
@@ -8573,14 +8592,10 @@ double Field_blob_compressed::val_real(void)
 longlong Field_blob_compressed::val_int(void)
 {
   ASSERT_COLUMN_MARKED_FOR_READ;
+  THD *thd= get_thd();
   String buf;
-  THD *thd;
-
   val_str(&buf, &buf);
-  if (!buf.length())
-    return 0;
-  thd= get_thd();
-  return Converter_strntoll_with_warn(thd, Warn_filter(thd), charset(),
+  return Converter_strntoll_with_warn(thd, Warn_filter(thd), field_charset,
                                       buf.ptr(), buf.length()).result();
 }
 

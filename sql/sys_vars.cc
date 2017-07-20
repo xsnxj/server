@@ -765,11 +765,12 @@ static Sys_var_uint Sys_column_compression_zlib_level(
        VALID_RANGE(0, 9), DEFAULT(6), BLOCK_SIZE(1));
 
 /*
-  Note that names must correspnd to zlib strategy definition. So that we can
+  Note that names must correspond to zlib strategy definition. So that we can
   pass column_compression_zlib_strategy directly to deflateInit2().
 */
 static const char *column_compression_zlib_strategy_names[]=
 { "DEFAULT_STRATEGY", "FILTERED", "HUFFMAN_ONLY", "RLE", "FIXED", 0 };
+
 static Sys_var_enum Sys_column_compression_zlib_strategy(
        "column_compression_zlib_strategy",
        "The strategy parameter is used to tune the compression algorithm. Use "

@@ -1721,7 +1721,7 @@ protected:
                     const char *from, uint length,
                     CHARSET_INFO *cs);
   String *uncompress_zlib(String *val_buffer, String *val_ptr,
-                          const uchar *from, size_t from_length);
+                          const uchar *from, uint from_length);
 public:
   Field_longstr(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
                 uchar null_bit_arg, utype unireg_check_arg,
@@ -1749,6 +1749,8 @@ public:
   bool can_optimize_range(const Item_bool_func *cond,
                           const Item *item,
                           bool is_eq_func) const;
+  uint8 number_storage_requirement(uint32 length) const
+  { return length < 256 ? 1 : length < 65536 ? 2 : length < 16777216 ? 3 : 4; }
 };
 
 /* base class for float and double and decimal (old one) */
@@ -3260,13 +3262,7 @@ public:
                    NONE, field_name_arg, cs)
   {
     flags|= BLOB_FLAG;
-    packlength= 4;
-    if (set_packlength)
-    {
-      packlength= len_arg <= 255 ? 1 :
-                  len_arg <= 65535 ? 2 :
-                  len_arg <= 16777215 ? 3 : 4;
-    }
+    packlength= set_packlength ? number_storage_requirement(len_arg) : 4;
   }
   Field_blob(uint32 packlength_arg)
     :Field_longstr((uchar*) 0, 0, (uchar*) "", 0, NONE, "temp", system_charset_info),
